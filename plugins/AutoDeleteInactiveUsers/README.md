@@ -9,13 +9,13 @@
 1. **定时任务触发**：按照设定的频率（每分钟/每小时/每天）触发扫描任务
 2. **并发控制**：使用缓存锁（5分钟有效期）防止多个任务实例同时运行
 3. **用户筛选条件**：系统筛选同时满足以下条件的用户：
-   - 未绑定套餐（`plan_id` 为空）
+   - 未绑定套餐（`plan_id` = null）
    - 没有流量额度（`transfer_enable = 0`）
    - 未设置到期时间（`expired_at = 0`）
-   - 从未登录（`last_login_at` 为空）
-   - 非管理员账号（`is_admin = 0`）
+   - 从未登录（`last_login_at` = null）
+   - 非管理员账号（`is_admin = false`）
    - 没有邀请其他用户（未出现在 `invite_user_id` 字段中）
-   - 注册时间早于当前时间减去设定的天数阈值
+   - 注册时间早于当前时间减去设定的天数阈值（`created_at < time() - (days * 86400)`）
 4. **批量处理**：每次处理指定数量的用户（默认100个），避免数据库压力过大
 5. **事务保护**：每个用户的删除操作在数据库事务中执行，确保数据一致性
 6. **关联数据清理**：删除用户时同时清理其关联的订单、兑换码、统计数据和工单
@@ -25,10 +25,27 @@
 | 配置项 | 说明 | 默认值 | 类型 |
 | --- | --- | --- | --- |
 | `enable_auto_delete` | 启用自动删除功能 | `false` | boolean |
-| `delete_days` | 注册超过该天数仍未激活的用户才会被清理 | `7` | integer |
-| `batch_size` | 每批次最多处理的用户数量 | `100` | integer |
-| `schedule_frequency` | 扫描执行频率（minutely/hourly/daily） | `daily` | string |
+| `delete_days` | 注册超过该天数仍未激活的用户才会被清理 | `7` | number |
+| `batch_size` | 每批次最多处理的用户数量 | `100` | number |
+| `schedule_frequency` | 定时任务频率（minutely/hourly/daily） | `daily` | select |
 | `dry_run` | 试运行模式，开启后仅记录日志不执行真实删除 | `true` | boolean |
+
+**定时任务频率说明：**
+- `minutely`：每分钟执行一次
+- `hourly`：每小时执行一次
+- `daily`：每天00:00执行一次
+
+### 并发控制
+- 使用缓存锁（`plugin:auto_delete_inactive_users:lock`）防止任务重复执行
+- 锁有效期为300秒（5分钟），确保任务不会并发运行
+
+### 删除操作
+- 每个用户删除都在数据库事务中执行
+- 删除用户前会先删除关联数据：
+  - 订单（`orders`）
+  - 兑换码（`codes`）
+  - 统计数据（`stat`）
+  - 工单（`tickets`）
 
 ## 日志输出
 

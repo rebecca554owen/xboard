@@ -3,12 +3,10 @@
 namespace Plugin\TrafficReset;
 
 use App\Models\Plan;
-use App\Models\TrafficResetLog;
 use App\Models\User;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\TrafficResetService;
 use Illuminate\Console\Scheduling\Schedule;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 

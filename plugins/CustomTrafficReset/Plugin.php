@@ -2,13 +2,11 @@
 
 namespace Plugin\CustomTrafficReset;
 
-use App\Models\Order;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\Plugin\AbstractPlugin;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Console\Scheduling\Schedule;
 
 /**
