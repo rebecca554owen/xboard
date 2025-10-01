@@ -131,8 +131,8 @@ class MailService
         $usedBytes = $user->u + $user->d;
         $usageRatio = $usedBytes / $user->transfer_enable;
 
-        // 流量使用超过80%时发送提醒
-        return $usageRatio >= 0.8;
+        // 流量使用超过95%时发送提醒
+        return $usageRatio >= 0.95;
     }
 
     public function remindTraffic(User $user)
@@ -187,7 +187,7 @@ class MailService
         if (!$transfer_enable)
             return false;
         $percentage = ($ud / $transfer_enable) * 100;
-        if ($percentage < 80)
+        if ($percentage < 95)
             return false;
         if ($percentage >= 100)
             return false;

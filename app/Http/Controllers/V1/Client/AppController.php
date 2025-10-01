@@ -56,6 +56,13 @@ class AppController extends Controller
         foreach ($config['proxy-groups'] as $k => $v) {
             $config['proxy-groups'][$k]['proxies'] = array_merge($config['proxy-groups'][$k]['proxies'], $proxies);
         }
+
+        // Add onclick functionality for one-click connection
+        $code = "填写授权码"; // Authorization code
+        $onClick_Href = $code."|".$user["email"]."|".$user["token"];
+        $encrypted = openssl_encrypt($onClick_Href, 'aes-128-cbc', "apps_connect_key", false, "8c97f304422a60e0");
+        $config['custom'] = ["one_click_link" => "appsconnect://".$encrypted];
+
         return(Yaml::dump($config));
     }
 
