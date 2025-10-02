@@ -72,7 +72,7 @@ class ClientController extends Controller
             filterKeywords: $filterKeywords
         );
 
-        $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered));
+        $this->setSubscribeInfoToServers($serversFiltered, $user, count($servers) - count($serversFiltered), $clientInfo);
         $serversFiltered = $this->addPrefixToServerName($serversFiltered);
 
         // Instantiate the protocol class with filtered servers and client info
@@ -150,6 +150,7 @@ class ClientController extends Controller
 
         $clientName = null;
         $clientVersion = null;
+        $isVortexClient = stripos($flag, 'vortex') !== false || stripos($flag, 'req/v3') !== false;
 
         if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/', $flag, $matches)) {
             $potentialName = strtolower($matches[1]);
@@ -185,14 +186,29 @@ class ClientController extends Controller
         return [
             'flag' => $flag,
             'name' => $clientName,
-            'version' => $clientVersion
+            'version' => $clientVersion,
+            'isVortexClient' => $isVortexClient
         ];
     }
 
-    private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0)
+    private function setSubscribeInfoToServers(&$servers, $user, $rejectServerCount = 0, array $clientInfo = [])
     {
         if (!isset($servers[0]))
             return;
+
+        // 为 Vortex 客户端添加套餐到期剩余时间提示
+        $isVortexClient = $clientInfo['isVortexClient'] ?? false;
+        if ($isVortexClient) {
+            $userService = new UserService();
+            $resetDay = $userService->getResetDay($user);
+            if ($resetDay && !empty($servers)) {
+                array_unshift($servers, array_merge($servers[0], [
+                    'name' => "距离下次重置剩余：{$resetDay} 天",
+                ]));
+            }
+            return; // Vortex 客户端只显示重置天数，不显示其他信息
+        }
+
         if ($rejectServerCount > 0) {
             array_unshift($servers, array_merge($servers[0], [
                 'name' => "过滤掉{$rejectServerCount}条线路",
