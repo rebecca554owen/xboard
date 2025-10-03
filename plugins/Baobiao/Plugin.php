@@ -15,8 +15,9 @@ use Illuminate\Support\Facades\Log;
 
 class Plugin extends AbstractPlugin
 {
+    private const RANK_LIST_LIMIT = 10;
+
     private TelegramService $telegramService;
-    private int $maxDays = 365;
 
     public function boot(): void
     {
@@ -93,7 +94,7 @@ class Plugin extends AbstractPlugin
     {
         // 获取天数参数，默认为0（当天）
         $days = isset($message->args[0]) ? intval($message->args[0]) : 0;
-        $days = max(0, min($days, $this->maxDays));
+        $days = max(0, $days);
 
         $result = $this->generateReport($days);
 
@@ -109,10 +110,9 @@ class Plugin extends AbstractPlugin
     {
         // 获取天数参数，默认为0（当天）
         $days = isset($message->args[0]) ? intval($message->args[0]) : 0;
-        $days = max(0, min($days, $this->maxDays));
+        $days = max(0, $days);
 
-        $limit = isset($message->args[1]) ? intval($message->args[1]) : $this->getConfig('top_limit', 10);
-        $limit = max(1, min($limit, 50)); // 限制最大50条
+        $limit = self::RANK_LIST_LIMIT;
 
         // 获取时间范围
         $timeRange = $this->getTimeRange($days);
@@ -129,8 +129,10 @@ class Plugin extends AbstractPlugin
         }
 
         $reportDays = $days === 0 ? '今日' : ($days === 1 ? '昨日' : "{$days}天内");
+        $periodLabel = $this->formatTimeRangeLabel($timeRange);
         $report = [
-            "📊 用户流量排行（{$reportDays}）",
+            "📊 用户流量排行",
+            "时段：{$periodLabel}",
             "══════════════════════════",
         ];
 
@@ -148,33 +150,31 @@ class Plugin extends AbstractPlugin
     {
         // 获取天数参数，默认为0（当天）
         $days = isset($message->args[0]) ? intval($message->args[0]) : 0;
-        $days = max(0, min($days, $this->maxDays));
+        $days = max(0, $days);
 
-        $limit = isset($message->args[1]) ? intval($message->args[1]) : $this->getConfig('top_limit', 10);
-        $limit = max(1, min($limit, 50)); // 限制最大50条
+        $limit = self::RANK_LIST_LIMIT;
 
         // 获取时间范围
         $timeRange = $this->getTimeRange($days);
         $statService = new StatisticalService();
-        $statService->setStartAt($timeRange['startAt']);
-        $statService->setEndAt($timeRange['endAt']);
+        $serverRank = $this->resolveServerTrafficRank($statService, $days, $limit, $timeRange);
 
-        $serverRank = $statService->getRanking('server_traffic_rank', $limit);
-
-        if (empty($serverRank)) {
+        if ($serverRank->isEmpty()) {
             $reportDays = $days === 0 ? '今日' : ($days === 1 ? '昨日' : "{$days}天内");
             $this->telegramService->sendMessage($message->chat_id, "📊 {$reportDays}暂无服务器流量数据", 'markdown');
             return;
         }
 
         $reportDays = $days === 0 ? '今日' : ($days === 1 ? '昨日' : "{$days}天内");
+        $periodLabel = $this->formatTimeRangeLabel($timeRange);
         $report = [
-            "📊 服务器流量排行（{$reportDays}）",
+            "📊 服务器流量排行",
+            "时段：{$periodLabel}",
             "══════════════════════════",
         ];
 
         // 获取服务器名称
-        $serverIds = collect($serverRank)->pluck('server_id')->unique()->toArray();
+        $serverIds = $serverRank->pluck('server_id')->unique()->toArray();
         $servers = Server::whereIn('id', $serverIds)->get()->keyBy('id');
 
         foreach ($serverRank as $index => $server) {
@@ -190,6 +190,51 @@ class Plugin extends AbstractPlugin
         }
 
         $this->telegramService->sendMessage($message->chat_id, implode("\n", $report), 'markdown');
+    }
+
+    private function resolveServerTrafficRank(StatisticalService $statService, int $days, int $limit, array $timeRange)
+    {
+        if ($days === 0) {
+            $statService->setStartAt($timeRange['startAt']);
+            $statService->setEndAt($timeRange['endAt']);
+
+            return collect($statService->getStatServer())
+                ->map(function ($stat) {
+                    $upload = (int) round($stat['u'] ?? 0);
+                    $download = (int) round($stat['d'] ?? 0);
+                    return (object) [
+                        'server_id' => (int) ($stat['server_id'] ?? 0),
+                        'server_type' => (string) ($stat['server_type'] ?? ''),
+                        'u' => $upload,
+                        'd' => $download,
+                        'total' => $upload + $download,
+                    ];
+                })
+                ->sortByDesc('total')
+                ->take($limit)
+                ->values();
+        }
+
+        $rawRank = $days === 1
+            ? StatisticalService::getServerRank('yesterday')
+            : StatisticalService::getServerRank($timeRange['startAt'], $timeRange['endAt']);
+
+        return collect($rawRank)
+            ->map(function ($stat) {
+                $upload = (int) round($stat['u'] ?? 0);
+                $download = (int) round($stat['d'] ?? 0);
+                $total = (int) round($stat['total'] ?? ($upload + $download));
+                return (object) [
+                    'server_id' => (int) ($stat['server_id'] ?? 0),
+                    'server_type' => (string) ($stat['server_type'] ?? ''),
+                    'u' => $upload,
+                    'd' => $download,
+                    'total' => $total,
+                ];
+            })
+            ->sortByDesc('total')
+            ->take($limit)
+            ->values();
     }
 
     private function sendDailyReport(): void
@@ -210,12 +255,12 @@ class Plugin extends AbstractPlugin
     {
         // 与 StatController 一致的时间处理逻辑
         $startAt = 0;
-        $endAt = time();
+        $endAt = strtotime('tomorrow');
 
         if ($days === 0) {
             // 当天报表 - 与 StatController 保持一致
             $startAt = strtotime('today');
-            $endAt = time();
+            $endAt = strtotime('tomorrow');
         } elseif ($days === 1) {
             // 昨日报表 - 与 StatController 保持一致
             $todayStart = strtotime('today');
@@ -233,16 +278,21 @@ class Plugin extends AbstractPlugin
         ];
     }
 
+    private function formatTimeRangeLabel(array $timeRange): string
+    {
+        $start = date('Y-m-d H:i', $timeRange['startAt']);
+        $end = date('Y-m-d H:i', $timeRange['endAt']);
+
+        return "{$start} ~ {$end}";
+    }
+
     private function generateReport(int $days = 0): array
     {
         $timeRange = $this->getTimeRange($days);
         $startAt = $timeRange['startAt'];
         $endAt = $timeRange['endAt'];
 
-        $dateRange = [
-            'start' => date('Y-m-d H:i', $startAt),
-            'end' => date('Y-m-d H:i', $endAt)
-        ];
+        $periodLabel = $this->formatTimeRangeLabel($timeRange);
 
         // 获取统计数据 - 与 StatController 的 getStats 方法保持一致
         // 订单相关统计
@@ -261,7 +311,7 @@ class Plugin extends AbstractPlugin
             ->where('created_at', '<', $endAt)
             ->count();
 
-        $expiredUsers = User::where('expired_at', '>=', $startAt)
+        $expiredUsersWithoutRenew = User::where('expired_at', '>=', $startAt)
             ->where('expired_at', '<', $endAt)
             ->count();
 
@@ -271,13 +321,13 @@ class Plugin extends AbstractPlugin
             ->whereNotIn('status', [0, 2])
             ->get();
 
-        $newOrderCount = $paidOrders->where('type', 1)->count();
-        $renewOrderCount = $paidOrders->where('type', 2)->count();
-        $upgradeOrderCount = $paidOrders->where('type', 3)->count();
+        $newOrderCount = $paidOrders->where('type', Order::TYPE_NEW_PURCHASE)->count();
+        $renewOrderCount = $paidOrders->where('type', Order::TYPE_RENEWAL)->count();
+        $upgradeOrderCount = $paidOrders->where('type', Order::TYPE_UPGRADE)->count();
 
-        $newOrderAmount = $paidOrders->where('type', 1)->sum('total_amount') / 100;
-        $renewOrderAmount = $paidOrders->where('type', 2)->sum('total_amount') / 100;
-        $upgradeOrderAmount = $paidOrders->where('type', 3)->sum('total_amount') / 100;
+        $newOrderAmount = $paidOrders->where('type', Order::TYPE_NEW_PURCHASE)->sum('total_amount') / 100;
+        $renewOrderAmount = $paidOrders->where('type', Order::TYPE_RENEWAL)->sum('total_amount') / 100;
+        $upgradeOrderAmount = $paidOrders->where('type', Order::TYPE_UPGRADE)->sum('total_amount') / 100;
 
 
         // 支付渠道统计 - 与 StatController 保持一致
@@ -298,29 +348,31 @@ class Plugin extends AbstractPlugin
             }
         }
 
-        // 续费率计算
-        $renewedUsers = $paidOrders->where('type', 2)->count();
-        $upgradedUsers = $paidOrders->where('type', 3)->count();
-        $renewedWithUpgrade = $renewedUsers + $upgradedUsers;
-        $unrenewed = max(0, $expiredUsers - $renewedUsers);
-        $unrenewedWithUpgrade = max(0, $expiredUsers - $renewedWithUpgrade);
+        // 续费率计算（按用户去重）
+        $renewOrderUsers = $paidOrders->where('type', Order::TYPE_RENEWAL)->pluck('user_id');
+        $upgradeOrderUsers = $paidOrders->where('type', Order::TYPE_UPGRADE)->pluck('user_id');
+
+        $renewUserCount = $renewOrderUsers->unique()->count();
+        $upgradeUserCount = $upgradeOrderUsers->unique()->count();
+        $renewedUsers = $renewOrderUsers->merge($upgradeOrderUsers)->unique()->count();
+
+        $expiredUsers = $expiredUsersWithoutRenew + $renewedUsers;
+        $unrenewed = $expiredUsersWithoutRenew;
         $renewRate = $expiredUsers ? round(($renewedUsers / $expiredUsers) * 100, 2) : 0;
-        $renewRateWithUpgrade = $expiredUsers ? round(($renewedWithUpgrade / $expiredUsers) * 100, 2) : 0;
 
         // 构建报表 - 与 StatController 保持一致的数据结构
         $report = [
-            "💸 运营报表",
-            "（{$dateRange['start']} 至 {$dateRange['end']}）",
+            "📊 运营报表",
+            "时段：{$periodLabel}",
             "══════════════════════════",
 
             "1️⃣ 用户统计：",
             "   ┌ 新增用户：{$newUsers}",
             "   ├ 到期用户：{$expiredUsers}",
-            "   ├ 续费用户：{$renewedUsers}",
-            "   ├ 升级用户：{$upgradedUsers}",
+            "   ├ 续费用户：{$renewUserCount}",
+            "   ├ 升级用户：{$upgradeUserCount}",
             "   ├ 未续费用户：{$unrenewed}",
-            "   ├ 续费率：{$renewRate}%",
-            "   └ 续费率（含改套餐）：{$renewRateWithUpgrade}%\n",
+            "   └ 续费率：{$renewRate}%\n",
 
             "2️⃣ 订单统计：",
             "   ┌ 新购订单：{$newOrderCount} 个（" . number_format($newOrderAmount, 2) . " 元）",
@@ -334,7 +386,7 @@ class Plugin extends AbstractPlugin
 
         // 添加支付渠道明细
         if ($paymentStats->isNotEmpty()) {
-            $report[] = $paymentStats->map(fn($p) => "   ▸ {$p['name']}: {$p['count']} 笔（{$p['amount']} 元）")->join("\n");
+            $report[] = $paymentStats->map(fn($p) => "   ▸ {$p['name']}：{$p['count']} 笔（{$p['amount']} 元）")->join("\n");
         } else {
             // 处理手动操作收款情况
             $manualOrders = Order::where('callback_no', 'manual_operation')
@@ -344,7 +396,7 @@ class Plugin extends AbstractPlugin
                 ->get();
             $totalManualAmount = $manualOrders->sum('total_amount') / 100;
             if ($totalManualAmount > 0) {
-                $report[] = "   ▸ 手动操作: {$manualOrders->count()} 笔（{$totalManualAmount} 元）";
+                $report[] = "   ▸ 手动操作：{$manualOrders->count()} 笔（{$totalManualAmount} 元）";
             }
         }
 
@@ -357,4 +409,5 @@ class Plugin extends AbstractPlugin
             'has_data' => ($paidTotal / 100) > 0 || $paymentStats->isNotEmpty()
         ];
     }
+
 }

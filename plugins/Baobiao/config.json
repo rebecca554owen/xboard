@@ -1,7 +1,7 @@
 {
     "name": "Bot 查询数据报表",
     "code": "baobiao",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "每日运营数据统计与报告",
     "author": "周宇航",
     "require": {
@@ -19,12 +19,6 @@
             "default": "09:00",
             "label": "日报发送时间",
             "description": "自动发送日报的时间（格式：HH:MM，24小时制）"
-        },
-        "top_limit": {
-            "type": "number",
-            "default": 10,
-            "label": "排行榜显示数量",
-            "description": "显示排行榜时的用户/服务器数量"
         }
     }
 }
