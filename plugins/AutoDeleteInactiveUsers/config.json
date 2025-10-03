@@ -1,8 +1,8 @@
 {
     "name": "自动删除无效用户",
     "code": "auto_delete_inactive_users",
-    "version": "1.0.0",
-    "description": "定时扫描并清理长期未激活、无流量、无套餐的注册用户，支持试运行模式。",
+    "version": "1.0.1",
+    "description": "定时清理无效用户和过期用户，支持试运行模式和安全保护。",
     "author": "周宇航",
     "require": {
         "xboard": ">=1.0.0"
@@ -12,23 +12,11 @@
             "type": "boolean",
             "default": false,
             "label": "启用自动删除",
-            "description": "开启后将按照设定周期自动清理符合条件的未激活用户。"
-        },
-        "delete_days": {
-            "type": "number",
-            "default": 7,
-            "label": "注册天数阈值",
-            "description": "注册超过指定天数仍未激活的用户会被纳入清理范围。"
-        },
-        "batch_size": {
-            "type": "number",
-            "default": 100,
-            "label": "单次处理数量",
-            "description": "每批次最多处理的用户数量，建议根据服务器性能调整。"
+            "description": "开启后将真实执行删除用户操作，关闭时为（试运行模式）仍会运行并统计拟删除用户数量。"
         },
         "schedule_frequency": {
             "type": "select",
-            "default": "daily",
+            "default": "hourly",
             "label": "定时任务频率",
             "description": "选择定时任务的执行频率。",
             "options": [
@@ -37,11 +25,23 @@
                 {"value": "daily", "label": "每天"}
             ]
         },
-        "dry_run": {
-            "type": "boolean",
-            "default": true,
-            "label": "试运行模式",
-            "description": "开启后仅输出拟删除的用户数量，不会真正执行删除操作。"
+        "delete_days": {
+            "type": "number",
+            "default": 7,
+            "label": "已经注册天数",
+            "description": "注册超过指定天数仍未激活的用户会被纳入清理范围。"
+        },
+        "delete_expired_users_after_days": {
+            "type": "number",
+            "default": 0,
+            "label": "删除过期用户天数",
+            "description": "删除过期超过指定天数的用户，0表示不删除过期用户。保护有余额和佣金用户。"
+        },
+        "batch_size": {
+            "type": "number",
+            "default": 1024,
+            "label": "单次处理数量",
+            "description": "每批次最多处理的用户数量，建议根据服务器性能调整。"
         }
     }
 }
