@@ -1,84 +1,311 @@
-﻿# Repository Guidelines
+# XBoard 插件钩子系统完整指南
 
-## 项目结构与模块划分
-- `app/` 保存 Laravel 领域层（providers、jobs、protocols、services），其中 `Providers` 负责注册容器绑定，`Protocols` 对接代理协议；新增功能时优先沿用既有特性目录。
-- `plugins/` 存放支付与消息插件，每个插件以 `Plugin.php` 为入口并附带 `config.json`，遵循共享 Contract 方便热插拔（更多细节见下方“插件架构与开发指南”）。
-- `database/migrations` 与 `database/seeders` 管理结构升级和演示数据；确保迁移可回滚、Seeder 幂等，并将跨版本提示记录在 `docs/`。
-- `resources/` 汇集前端入口 JS、Blade 视图、语言包与校验规则；用户主题位于 `theme/`（默认 `theme/Xboard`），静态资源发布在 `public/`。
-- `.docker/` 以及根目录脚本 `init.sh`、`update.sh` 支持容器化部署与就地升级；`compose.sample.yaml` 提供默认服务编排样板。
+## 📋 钩子系统概述
 
-## 插件架构与开发指南
-插件统一放置于 `plugins/`，目录使用 StudlyCase，与 `config.json` 中的 snake_case `code` 互为映射。推荐骨架：
+XBoard 提供了强大的钩子系统，允许插件在系统关键节点扩展功能。钩子分为两种类型：
 
-```
-plugins/Example/
-  Plugin.php
-  config.json
-  README.md
-  Providers/PluginServiceProvider.php
-  routes/web.php
-  routes/api.php
-  database/migrations/
-  resources/views/
-  resources/assets/
+- **过滤钩子 (Filter Hooks)** - 用于修改数据
+- **动作钩子 (Action Hooks)** - 用于执行操作
+
+## 🎯 钩子类型说明
+
+### 过滤钩子 (Filter)
+过滤钩子允许插件修改传递给它们的数据。插件可以接收数据，修改后返回新值。
+
+```php
+$this->filter('hook_name', function ($data) {
+    // 修改数据
+    $data['new_field'] = 'value';
+    return $data;
+});
 ```
 
-示例配置片段：
+### 动作钩子 (Action)
+动作钩子允许插件在特定事件发生时执行操作，但不修改数据。
 
-```json
+```php
+$this->listen('hook_name', function ($data) {
+    // 执行操作
+    $this->doSomething($data);
+});
+```
+
+## 🔧 完整钩子列表
+
+### 用户相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `user.register.before` | action | `Request` | 用户注册前执行 |
+| `user.register.after` | action | `User` | 用户注册后执行 |
+| `user.login.after` | action | `User` | 用户登录后执行 |
+| `user.password.reset.after` | action | `User` | 用户密码重置后执行 |
+| `user.subscribe.response` | filter | `User` | 调整用户订阅响应数据 |
+| `user.knowledge.resource` | filter | `array, Request, Resource` | 调整用户知识库资源数据 |
+
+### 订单相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `order.create.before` | action | `User, Plan, period, couponCode` | 订单创建前执行 |
+| `order.create.after` | action | `Order` | 订单创建后执行 |
+| `order.after_create` | action | `Order` | 订单创建后执行（旧版） |
+| `order.open.before` | action | `Order` | 订单开启前执行 |
+| `order.open.after` | action | `Order` | 订单开启后执行 |
+| `order.cancel.before` | action | `Order` | 订单取消前执行 |
+| `order.cancel.after` | action | `Order` | 订单取消后执行 |
+
+### 支付相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `available_payment_methods` | filter | `array` | 获取可用支付方式列表 |
+| `payment.notify.before` | action | `method, uuid, request` | 支付回调前执行 |
+| `payment.notify.failed` | action | `method, uuid, request` | 支付回调验证失败执行 |
+| `payment.notify.verified` | action | `array` | 支付回调验证成功执行 |
+| `payment.notify.success` | action | `Order` | 支付成功后执行 |
+
+### 流量相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `traffic.process.before` | filter | `server, protocol, data` | 流量处理前调整数据 |
+| `traffic.before_process` | filter | `server, protocol, data` | 流量处理前调整数据（旧版） |
+| `traffic.reset.after` | action | `User` | 流量重置后执行 |
+
+### 工单相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `ticket.create.after` | action | `Ticket` | 工单创建后执行 |
+| `ticket.reply.user.after` | action | `Ticket` | 用户回复工单后执行 |
+| `ticket.reply.admin.after` | action | `Ticket, TicketMessage` | 管理员回复工单后执行 |
+| `ticket.close.after` | action | `Ticket` | 工单关闭后执行 |
+
+### 协议相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `protocol.servers.filtered` | filter | `array` | 调整协议服务器列表 |
+
+### 订阅相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `subscribe.url` | filter | `string` | 调整订阅链接URL |
+| `client.subscribe.before` | action | - | 客户端订阅前执行 |
+| `client.subscribe.unavailable` | action | - | 客户端订阅不可用执行 |
+| `client.subscribe.servers` | filter | `array, User, Request` | 调整客户端订阅服务器列表 |
+
+### 服务器相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `server.users.get` | filter | `array, Node` | 获取服务器用户列表 |
+
+### Telegram相关钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `telegram.message.before` | action | `array` | Telegram消息处理前执行 |
+| `telegram.message.handle` | filter | `bool, array` | 处理Telegram消息（返回是否处理） |
+| `telegram.message.unhandled` | action | `array` | Telegram消息未处理执行 |
+| `telegram.message.after` | action | `array` | Telegram消息处理后执行 |
+| `telegram.message.error` | action | `array, Exception` | Telegram消息处理错误执行 |
+| `telegram.bot.commands` | filter | `array` | 获取Telegram机器人命令列表 |
+| `user.telegram.bind.after` | action | `User` | 用户绑定Telegram后执行 |
+
+### 前端配置钩子
+
+| 钩子名称 | 类型 | 参数 | 描述 |
+|---------|------|------|------|
+| `guest_comm_config` | filter | `array` | 调整前端公共配置数据 |
+
+## 🚀 钩子使用示例
+
+### 过滤钩子使用
+
+```php
+// 在 Plugin.php 的 boot() 方法中
+$this->filter('guest_comm_config', function ($config) {
+    // 添加前端配置
+    $config['my_plugin_enable'] = true;
+    $config['my_plugin_setting'] = $this->getConfig('api_key', '');
+    return $config;
+});
+```
+
+### 动作钩子使用
+
+```php
+// 用户注册后执行操作
+$this->listen('user.register.after', function ($user) {
+    // 发送欢迎邮件
+    $this->sendWelcomeEmail($user);
+
+    // 记录日志
+    \Log::info('New user registered', ['user_id' => $user->id]);
+});
+```
+
+### 支付回调钩子
+
+```php
+// 支付成功后执行操作
+$this->listen('payment.notify.success', function ($order) {
+    // 更新用户状态
+    $user = $order->user;
+    $user->status = 'active';
+    $user->save();
+
+    // 发送通知
+    $this->sendPaymentSuccessNotification($user, $order);
+});
+```
+
+## 📝 最佳实践
+
+### 1. 钩子注册位置
+
+所有钩子应该在插件的 `boot()` 方法中注册：
+
+```php
+class Plugin extends AbstractPlugin
 {
-  "name": "示例插件",
-  "code": "sample_plugin",
-  "version": "1.0.0",
-  "type": "feature",
-  "description": "扩展业务功能",
-  "author": "XBoard Team",
-  "require": {"xboard": ">=1.0.0"},
-  "config": {
-    "enable": {
-      "type": "boolean",
-      "default": false,
-      "label": "启用插件",
-      "description": "控制插件是否对外开放"
+    public function boot(): void
+    {
+        // 注册过滤钩子
+        $this->filter('guest_comm_config', function ($config) {
+            // ...
+        });
+
+        // 注册动作钩子
+        $this->listen('user.register.after', function ($user) {
+            // ...
+        });
     }
-  }
 }
 ```
 
-- **入口类**：`Plugin.php` 必须继承 `App\\Services\\Plugin\\AbstractPlugin`，构造器会自动写入插件代号与绝对路径；常用扩展点包括 `boot()` 注册钩子、`install()` 与 `cleanup()` 负责安装卸载、`update()` 处理版本迁移。
-- **扩展方式**：事件侧重使用 `listen()` 捕获业务动作，数据加工选用 `filter()` 链式修改返回值；如需提前结束流程请调用 `intercept()` 返回响应，避免在插件内部直接 `abort()`。
-- **配置载入**：`config.json` 内的 `config` 字段定义管理端表单，支持 `boolean`、`number`、`text`、`select` 等类型；安装时默认值会落库至 `v2_plugins.config`，启用后 `PluginManager` 自动注入，可在插件内结合 `Cache::forget("plugin_config_{$code}")` 或 `HasPluginConfig` Trait 处理热更新。
-- **路由与视图**：可选创建 `routes/web.php` 或 `routes/api.php`，命名空间固定为 `Plugin\\<Studly>\\Controllers`；视图存放 `resources/views` 并由 `View::addNamespace` 注册，静态资源置于 `resources/assets` 后由管理器复制至 `public/plugins/<code>`。
-- **数据库与调度**：迁移文件位于 `database/migrations`，`install()` 与 `update()` 会触发自动迁移；定时任务可覆盖 `schedule(Schedule $schedule)`，结合插件配置决定执行频率，避免在 `boot()` 中直接注册调度逻辑。
-- **命令与服务提供者**：命令类放在 `Commands` 目录，`registerCommands()` 会按文件名自动注册；如需额外容器绑定或事件订阅，可实现 `Providers/PluginServiceProvider` 并在启用阶段由管理器加载。
-- **安装与分发**：后台上传 `zip` 包时确保根目录包含 `config.json` 与 `Plugin.php`，版本遵循 SemVer，升级流程会先执行 `disable()`、迁移再调用插件 `update()`；`type` 可设为 `payment` 以纳入支付渠道列表，默认 `feature` 则作为业务功能插件。
-- **测试与排障**：推荐在插件内记录关键操作日志并复用现有队列、缓存工具；开启 `dry_run` 等保护配置时优先使用 `Cache` 锁避免并发冲突，升级前执行 `php artisan plugin:update <code>` 验证流程。
+### 2. 错误处理
 
-## 构建、测试与开发命令
-- 本地初始化依次执行 `composer install` 与 `php artisan xboard:install`，会生成 `.env`、迁移数据库并写入默认管理员。
-- 日常升级使用 `php artisan migrate --seed`；在 CI 或生产批处理时追加 `--force` 并提前验证回滚方案。
-- 开发调试建议 `php artisan octane:start --watch`，队列与定时任务通过 `php artisan horizon`、`php artisan schedule:work` 监控。
-- 容器场景复制 `compose.sample.yaml` 为 `docker-compose.yaml`，再运行 `docker compose up -d`；需要重新安装时使用 `docker compose run web php artisan xboard:install`。
-- Linux 主机可直接调用 `bash init.sh`、`bash update.sh` 复用 Composer 与 Artisan 自动化；Windows 推荐在 WSL 环境执行。
+在钩子回调中应该包含适当的错误处理：
 
-## 编码风格与命名规范
-- 遵循 PSR-12，保持 4 空格缩进、LF 行尾（由 `.editorconfig` 约束），Markdown 允许必要的行尾双空格。
-- 服务、作业、事件类采用 PascalCase；配置键、环境变量、数据库列保持 snake_case，Blade 组件使用 kebab-case。
-- 优先沿用 `app/Support` 与 `App\\Traits` 中现有工具，并保持显式返回类型；提交前运行 `vendor/bin/phpstan analyse`（等级 5）。
-- 若需格式化，可使用 `php-cs-fixer` 或 IDE 的 PSR-12 规则，避免在 PR 中混入纯格式化变更。
+```php
+$this->listen('payment.notify.success', function ($order) {
+    try {
+        // 业务逻辑
+        $this->processPayment($order);
+    } catch (\Exception $e) {
+        \Log::error('Payment processing failed', [
+            'order_id' => $order->id,
+            'error' => $e->getMessage()
+        ]);
+    }
+});
+```
 
-## 测试指引
-- 后端测试位于 `tests/Unit`、`tests/Feature`，文件命名 `<Subject>Test.php`，命名空间镜像业务代码；可复用 `RefreshDatabase` Trait。
-- 默认执行 `php artisan test --parallel`，长耗时任务可添加 `--without-tty`；需要稳定数据时使用工厂或主 Seeder。
-- Stripe、Telegram、Btcpay 等外部依赖需 Mock，凭据放在 `.env.testing` 中的虚拟值，保持测试离线可复现。
+### 3. 性能考虑
 
-## 提交与合并请求规范
-- 采用 Conventional Commit（如 `0798b37 feat(telegram plugin): improve Telegram notification formatting`），scope 对应模块或插件名称。
-- 每个 PR 聚焦单一变更，描述需包含摘要、关联 Issue、迁移说明及 UI 截图或日志（若涉及前端或展示层）。
-- 在创建 PR 前确保 `php artisan test` 与 `vendor/bin/phpstan analyse` 通过，如修改 Docker 或 Octane 配置请在描述中标注后续操作。
-- 基于 `master` rebase，避免提交生成文件（如 `theme/**/umi.js`、`public/storage`）与调试输出。
+- 避免在钩子中执行耗时操作
+- 对于耗时任务，使用队列处理
+- 合理使用缓存减少重复计算
 
-## 安全与配置提示
-- `.env` 仅保留模板，敏感信息通过 `.env.example` 引导并定期轮换；生产部署务必开启 HTTPS 并使用强随机密钥。
-- 确保 `storage/`、`.docker/.data` 拥有写权限，日志与缓存可用 `php artisan queue:flush`、`php artisan cache:clear` 清理。
-- 调整后台路径或队列配置后记得执行 `php artisan octane:reload`，并同步更新监控或自动化脚本。
+## 🔍 调试技巧
+
+### 查看可用钩子
+
+```bash
+# 查看系统中所有可用的钩子
+php artisan hook:list
+```
+
+### 钩子调试日志
+
+```php
+// 在钩子回调中添加调试日志
+$this->listen('user.register.after', function ($user) {
+    \Log::debug('User registered hook triggered', [
+        'user_id' => $user->id,
+        'email' => $user->email
+    ]);
+
+    // 业务逻辑...
+});
+```
+
+## 📚 钩子开发建议
+
+### 1. 保持钩子简洁
+
+钩子回调应该专注于单一职责，避免过于复杂的逻辑。
+
+### 2. 数据一致性
+
+在过滤钩子中修改数据时，确保数据格式和类型的一致性。
+
+### 3. 依赖注入
+
+在钩子回调中可以通过依赖注入获取所需服务：
+
+```php
+$this->listen('user.register.after', function ($user) {
+    $mailService = app(\App\Services\MailService::class);
+    $mailService->sendWelcomeEmail($user);
+});
+```
+
+## 🎯 常用钩子场景
+
+### 用户注册流程
+
+```php
+// 用户注册前验证
+$this->listen('user.register.before', function ($request) {
+    // 自定义验证逻辑
+    if (!$this->validateRegistration($request)) {
+        throw new \Exception('Registration validation failed');
+    }
+});
+
+// 用户注册后操作
+$this->listen('user.register.after', function ($user) {
+    // 发送欢迎邮件
+    $this->sendWelcomeEmail($user);
+
+    // 创建默认配置
+    $this->createDefaultSettings($user);
+});
+```
+
+### 支付流程扩展
+
+```php
+// 添加自定义支付方式
+$this->filter('available_payment_methods', function ($methods) {
+    $methods[] = [
+        'name' => 'my_custom_payment',
+        'label' => '自定义支付',
+        'handler' => MyCustomPaymentHandler::class
+    ];
+    return $methods;
+});
+
+// 支付成功处理
+$this->listen('payment.notify.success', function ($order) {
+    // 更新业务状态
+    $this->updateBusinessStatus($order);
+
+    // 发送通知
+    $this->sendPaymentSuccessNotifications($order);
+});
+```
+
+## ⚡ 钩子系统优势
+
+- **非侵入式扩展**：无需修改核心代码即可扩展功能
+- **模块化设计**：每个插件独立，互不影响
+- **灵活配置**：可根据需要启用或禁用特定钩子
+- **性能优化**：钩子系统经过优化，对性能影响极小
+
+通过合理使用钩子系统，开发者可以轻松扩展 XBoard 的功能，满足各种定制化需求。
