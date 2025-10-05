@@ -118,6 +118,9 @@ class AuthController extends Controller
             }
         }
         $email = $request->input('email');
+        if ($email !== strtolower($email)) {
+            return $this->fail([400, __('Email must be lowercase')]);
+        }
         $password = $request->input('password');
         $exist = User::where('email', $email)->first();
         if ($exist) {
