@@ -36,7 +36,7 @@ class Plugin extends AbstractPlugin
                 $this->checkPlanTagsAndRecalculate();
                 $this->checkAndFixIncorrectResetTimes();
             }
-        })->cron("*/{$checkInterval} * * * *")->name('custom_traffic_reset_combined_check');
+        })->cron("*/{$checkInterval} * * * *")->name('custom_traffic_reset_combined_check')->onOneServer();
     }
 
     /**

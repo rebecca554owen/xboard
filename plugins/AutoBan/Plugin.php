@@ -33,13 +33,13 @@ class Plugin extends AbstractPlugin
             }
 
             $this->executeAutoBan();
-        })->cron($this->getScanCronExpression());
+        })->cron($this->getScanCronExpression())->name('auto_ban_scan')->onOneServer();
 
         // 自动解禁任务
         if ($this->getConfig('enable_auto_unban', false)) {
             $schedule->call(function (): void {
                 $this->unbanAllUsers();
-            })->dailyAt($this->getConfig('unban_time', '00:00'));
+            })->dailyAt($this->getConfig('unban_time', '00:00'))->name('auto_ban_unban')->onOneServer();
         }
     }
 

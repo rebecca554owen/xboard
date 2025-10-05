@@ -43,6 +43,8 @@ class Plugin extends AbstractPlugin
             default:
                 $task->hourly();
         }
+
+        $task->name('traffic_reset_auto')->onOneServer();
     }
 
     /**

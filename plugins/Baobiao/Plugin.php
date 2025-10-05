@@ -61,7 +61,7 @@ class Plugin extends AbstractPlugin
             if ($this->getConfig('enable_auto_report', true)) {
                 $this->sendDailyReport();
             }
-        })->dailyAt($this->getConfig('report_time', '09:00'));
+        })->dailyAt($this->getConfig('report_time', '09:00'))->name('baobiao_auto_report')->onOneServer();
     }
 
     private function handleTelegramCommand($message): void

@@ -46,6 +46,8 @@ class Plugin extends AbstractPlugin
                 $task->dailyAt('00:00');
                 break;
         }
+
+        $task->name('auto_delete_inactive_users')->onOneServer();
     }
 
     /**
