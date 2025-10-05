@@ -6,7 +6,7 @@ use App\Services\ServerService;
 use App\Services\StatisticalService;
 use App\Utils\Helper;
 
-class Tops extends Day
+class Tops extends Start
 {
     public $command = '/tops';
     public $description = '服务器流量排行';
