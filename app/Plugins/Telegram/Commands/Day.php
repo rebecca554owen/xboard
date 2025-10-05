@@ -5,9 +5,8 @@ namespace App\Plugins\Telegram\Commands;
 use App\Models\Order;
 use App\Models\Payment;
 use App\Models\User;
-use App\Plugins\Telegram\Telegram;
 
-class Day extends Telegram
+class Day extends Start
 {
     public $command = '/day';
     public $description = '运营报表';
@@ -28,63 +27,6 @@ class Day extends Telegram
 
         $reportDays = $days === 0 ? '当天' : "{$days}天";
         $this->telegramService->sendMessage($message->chat_id, "📊 {$reportDays}无运营数据", 'markdown');
-    }
-
-    /**
-     * 校验是否为管理员或员工的私聊命令。
-     */
-    protected function ensureAuthorized($message): bool
-    {
-        if (!$message->is_private) {
-            return false;
-        }
-
-        $user = User::where('telegram_id', $message->chat_id)->first();
-        if (!$user || (!$user->is_admin && !$user->is_staff)) {
-            $this->telegramService->sendMessage($message->chat_id, '❌ 权限不足，仅管理员和员工可使用此命令');
-            return false;
-        }
-
-        return true;
-    }
-
-    /**
-     * 解析命令中的天数参数。
-     */
-    protected function resolveDays(array $args, int $index = 0): int
-    {
-        return isset($args[$index]) ? max(0, intval($args[$index])) : 0;
-    }
-
-    protected function getTimeRange(int $days = 0): array
-    {
-        $startAt = 0;
-        $endAt = strtotime('tomorrow');
-
-        if ($days === 0) {
-            $startAt = strtotime('today');
-            $endAt = strtotime('tomorrow');
-        } elseif ($days === 1) {
-            $todayStart = strtotime('today');
-            $startAt = strtotime('-1 day', $todayStart);
-            $endAt = $todayStart;
-        } else {
-            $startAt = strtotime("-{$days} days", strtotime('today'));
-            $endAt = time();
-        }
-
-        return [
-            'startAt' => $startAt,
-            'endAt' => $endAt,
-        ];
-    }
-
-    protected function formatTimeRangeLabel(array $timeRange): string
-    {
-        $start = date('Y-m-d H:i', $timeRange['startAt']);
-        $end = date('Y-m-d H:i', $timeRange['endAt']);
-
-        return "{$start} ~ {$end}";
     }
 
     protected function generateReport(int $days = 0): array

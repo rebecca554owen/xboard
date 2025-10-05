@@ -6,7 +6,7 @@ use App\Models\User;
 use App\Services\StatisticalService;
 use App\Utils\Helper;
 
-class Top extends Day
+class Top extends Start
 {
     public $command = '/top';
     public $description = '用户流量排行';
