@@ -14,32 +14,13 @@
             "label": "启用插件",
             "description": "关闭后保留原有流量重置逻辑，不再写入 next_reset_at。"
         },
-        "default_interval_days": {
+        "sync_interval_minutes": {
             "type": "number",
-            "default": 30,
-            "label": "默认重置间隔（天）",
-            "description": "当套餐标签未命中时采用的间隔天数，默认 30 天，0 表示不自动重置。"
-        },
-        "batch_size": {
-            "type": "number",
-            "default": 100,
-            "min": 10,
-            "max": 1000,
-            "label": "批处理用户数量",
-            "description": "套餐标签变更时每批处理的用户数量，建议根据服务器性能调整。"
-        },
-        "enable_expired_at_calculation": {
-            "type": "boolean",
-            "default": true,
-            "label": "启用到期日计算",
-            "description": "根据套餐标签中的重置周期计算用户到期时间，默认到期日等于重置周期"
-        },
-        "check_interval_minutes": {
-            "type": "number",
-            "default": 5,
-            "min": 1,
-            "label": "检查间隔（分钟）",
-            "description": "定时检查套餐标签变更和重置时间错误的间隔时间"
+            "default": 0,
+            "min": 0,
+            "max": 60,
+            "label": "巡检间隔（分钟）",
+            "description": "0 表示不自动巡检，可临时设置为 N 分钟以扫描并纠正带标签用户的 next_reset_at。"
         }
     }
 }

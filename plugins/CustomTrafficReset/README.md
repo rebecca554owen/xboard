@@ -1,111 +1,80 @@
-# 自定义流量重置插件（CustomTrafficReset）
+# CustomTrafficReset 插件
 
-## 插件简介
+自定义流量重置周期插件，通过套餐标签 `interval_days` 精确控制用户的下一次流量重置时间，并兼容 XBoard 现有的订单开通逻辑。
 
-该插件提供灵活的流量重置周期管理功能，通过套餐标签配置自定义重置间隔，支持与系统默认重置逻辑并行工作。
+## 功能要点
 
-## 核心功能
+- **按标签驱动的重置周期**：只有带 `interval_days:<天数>` 标签的套餐会启用自定义重置时间，无标签维持系统默认行为。
+- **尊重订单场景**：覆盖无套餐新购、到期后续费、在期续费、换套餐四种典型场景，自动选择合适的起算时间。
+- **保持到期逻辑不变**：`expired_at` 仍按照周期（按月）延长，与核心的 `OrderService` 保持一致。
+- **流量重置同步**：当系统执行流量重置 (`traffic.reset.after`) 时，为带标签的用户重新计算 `next_reset_at`，确保周期连续。
+- **定时巡检修正**：可通过配置指定巡检间隔，按最新标签及重置记录自动纠正 `next_reset_at`。
+- **详细日志**：订单开通前后都会写入结构化日志，便于排查实际执行路径及计算结果。
 
-### 1. 自定义重置周期
-- 通过套餐标签 `interval_days:N` 配置重置间隔（N为天数）
-- 支持与系统默认重置逻辑（月结日、每月一号等）共存
-- 自动计算下次重置时间并更新 `next_reset_at` 字段
+## 标签定义
 
-### 2. 智能事件触发
-- **订单开通后**：自动计算重置时间和到期时间
-- **流量重置后**：重新计算下次重置时间
-- **套餐标签变更**：批量重新计算相关用户的重置时间
-
-### 3. 到期时间计算
-- 根据套餐标签中的基础周期和订单周期计算实际到期天数
-- 支持季付、半年付、年付等多周期订单
-- 自动更新 `expired_at` 字段
-
-## 配置项说明
-
-| 配置项 | 说明 | 默认值 | 类型 |
-| --- | --- | --- | --- |
-| `enabled` | 启用插件 | `true` | boolean |
-| `default_interval_days` | 默认重置间隔（天） | `30` | number |
-| `batch_size` | 批处理用户数量 | `100` | number |
-| `enable_expired_at_calculation` | 启用到期日计算 | `true` | boolean |
-| `check_interval_minutes` | 检查间隔（分钟） | `5` | number |
-
-## 套餐标签配置
-
-### 重置周期配置
-在套餐标签中添加 `interval_days:N` 来配置自定义重置周期：
+在套餐标签中添加以下格式即可启用自定义周期：
 
 ```
-interval_days:7     # 每周重置
-interval_days:15    # 每半月重置
-interval_days:30    # 每月重置（默认）
-interval_days:90    # 每季度重置
-interval_days:0     # 不自动重置
+interval_days:30
+interval_days:90
+interval_days:7
 ```
 
-### 到期周期配置
-在套餐标签中添加 `expired_days:N` 来配置自定义到期周期：
+标签值需为正整数，表示间隔天数。常见示例：
 
+- `interval_days:7`：每 7 天重置一次流量
+- `interval_days:15`：半月重置
+- `interval_days:90`：季度重置
+
+## 订单场景和预期行为
+
+| 场景 | 判断依据 | 到期时间 (`expired_at`) | 下一次重置 (`next_reset_at`) |
+|------|----------|-------------------------|-------------------------------|
+| 无套餐新购 | 用户原本无套餐 | 当前时间起按订阅周期加月 | 当前时间 + `interval_days` |
+| 到期后续费 | 用户套餐已过期 | 当前时间起按订阅周期加月 | 当前时间 + `interval_days` |
+| 在期续费 | 套餐未到期且未换套餐 | 原到期时间再加订阅周期月数 | 若原 `next_reset_at` 仍在未来则保持不变；缺失或已过期时从当前时间 + `interval_days` 重新起算 |
+| 换套餐 | 新旧套餐不同 | 当前时间起按新套餐订阅周期加月 | 当前时间 + `interval_days` |
+
+> 续费时只调整有标签的套餐；对无标签套餐不会覆盖系统 `next_reset_at`。
+
+## 钩子注册
+
+插件在 `boot()` 中注册三个动作钩子，并在 `schedule()` 中依据配置安排定时任务：
+
+- `order.open.before`：记录订单处理前的用户状态（套餐 ID、到期时间、下次重置时间）。
+- `order.open.after`：依据场景重新计算 `expired_at` 与 `next_reset_at`，并保存变更。
+- `traffic.reset.after`：在系统重置流量后为带标签用户计算新的 `next_reset_at`。
+- 定时任务：当配置 `sync_interval_minutes` > 0 时，按设定间隔扫描带标签的用户，根据最新标签和重置记录修正下一次流量重置时间。
+
+## 配置项
+
+`config.json` 提供以下两个配置项：
+
+```json
+{
+  "enabled": {
+    "type": "boolean",
+    "default": true,
+    "label": "启用插件",
+    "description": "关闭后保留原有流量重置逻辑，不再写入 next_reset_at。"
+  },
+  "sync_interval_minutes": {
+    "type": "number",
+    "default": 0,
+    "label": "巡检间隔（分钟）",
+    "description": "0 表示不自动巡检，可临时设置为 N 分钟以触发批量扫描与修正。"
+  }
+}
 ```
-expired_days:30     # 30天到期
-expired_days:90     # 90天到期
-expired_days:365    # 365天到期
-```
 
-## 执行逻辑
+## 安装与使用
 
-### 时间范围计算
-```php
-// 自定义周期：新周期从当前时间开始计算
-$baseTime = $currentTime;
+1. 将插件放置于 `plugins/CustomTrafficReset` 目录并在后台启用。
+2. 给需要自定义周期的套餐添加 `interval_days:<天数>` 标签。
+3. 按照正常流程创建订单或执行流量重置，即可触发插件逻辑。
 
-// 固定周期：优先使用上次重置时间作为基准
-$baseTime = $user->last_reset_at ?: $currentTime;
+## 排查建议
 
-// 计算下次重置时间
-$nextResetAt = strtotime("+{$intervalDays} days", $baseTime);
-```
-
-### 订单周期乘数
-```php
-$multipliers = [
-    'monthly' => 1,      // 月付
-    'quarterly' => 3,    // 季付
-    'half_yearly' => 6,  // 半年付
-    'yearly' => 12,      // 年付
-    'two_yearly' => 24,  // 两年付
-    'three_yearly' => 36 // 三年付
-];
-```
-
-### 重置时间验证
-- 确保重置时间不超过用户到期时间
-- 如果计算出的重置时间在过去，自动调整到未来
-- 当 `interval_days <= 0` 时，设置 `next_reset_at` 为 null
-
-## 定时任务
-
-### 套餐标签变更检查
-- 每5分钟检查一次套餐标签变更
-- 自动重新计算相关用户的重置时间
-- 使用缓存记录最后检查时间，避免重复处理
-
-### 重置时间修复
-- 检查并修复计算错误的 `next_reset_at` 时间
-- 主要修复自定义周期用户被其他插件重置后的时间同步问题
-
-## 事件钩子
-
-### 注册的钩子
-- `order.open.after`：订单开通后计算重置时间和到期时间
-- `traffic.reset.after`：流量重置后重新计算下次重置时间
-
-## 技术特性
-
-- **事务安全**：所有数据库操作都在事务中执行
-- **批量处理**：支持分批处理大量用户，避免数据库压力
-- **错误恢复**：单个用户计算失败不影响其他用户
-- **详细日志**：提供完整的执行过程记录
-- **缓存优化**：使用缓存锁防止任务重复执行
-- **兼容性**：与系统默认重置逻辑完全兼容
+- 关注日志中 `custom_traffic_reset.*` 相关条目，快速定位订单场景及结果。
+- 若 `next_reset_at` 未更新，确认套餐是否已设置正确标签，以及插件开关是否启用。*** End Patch*** End Patch**?** Wait format off? Need ensure apply_patch format proper: begin patch etc. Need newlines. Do again carefully.

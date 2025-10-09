@@ -3,6 +3,7 @@
 namespace Plugin\TrafficReset;
 
 use App\Models\Plan;
+use App\Models\TrafficResetLog;
 use App\Models\User;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\TrafficResetService;
@@ -59,24 +60,37 @@ class Plugin extends AbstractPlugin
                 ->where('banned', 0)
                 ->whereRaw('(u + d) >= transfer_enable * 0.99')  // 使用99%阈值，避免刚好用完的情况
                 ->whereNotNull('plan_id')
+                ->whereHas('plan', function ($query) {
+                    $query->where(function ($q) {
+                        $q->whereNull('reset_traffic_method')
+                            ->orWhere('reset_traffic_method', '!=', Plan::RESET_TRAFFIC_NEVER);
+                    });
+                })
                 ->pluck('id');
 
-            if ($userIds->count() > 0) {
-                Log::info("扫描到 " . $userIds->count() . " 个流量耗尽的用户");
+            if ($userIds->isEmpty()) {
+                return;
             }
 
-            $userIds->chunk($batchSize)->each(function ($chunkedUserIds) {
+            Log::info("扫描到 " . $userIds->count() . " 个流量耗尽的用户");
+
+            $successCount = 0;
+            $userIds->chunk($batchSize)->each(function ($chunkedUserIds) use (&$successCount) {
                 $users = User::with('plan')
                     ->whereIn('id', $chunkedUserIds)
                     ->get();
 
                 foreach ($users as $user) {
                     $result = $this->resetUserTraffic($user);
-                    if (!$result) {
-                        Log::info("用户 {$user->email} 重置失败，可能不满足条件");
+                    if ($result) {
+                        $successCount++;
                     }
                 }
             });
+
+            if ($successCount > 0) {
+                Log::info("成功重置了 {$successCount} 个用户的流量");
+            }
         } catch (\Exception $e) {
             Log::error('扫描执行失败', ['error' => $e->getMessage()]);
         }
@@ -103,7 +117,6 @@ class Plugin extends AbstractPlugin
                 $intervalDays = $this->getCustomIntervalDays($user->plan);
                 $remainingDays = ($user->expired_at - time()) / 86400;
                 if ($remainingDays <= $intervalDays) {
-                    Log::info("用户 {$user->email} 剩余时间不足 {$intervalDays} 天，跳过重置");
                     return false;
                 }
             } else {
@@ -126,10 +139,12 @@ class Plugin extends AbstractPlugin
                 $remainingDays = ($user->expired_at - time()) / 86400;
                 $requiredDays = $resetMethod === Plan::RESET_TRAFFIC_MONTHLY ? 30 : 30; // 按月结日和每月一号都按30天计算
                 if ($remainingDays <= $requiredDays) {
-                    Log::info("用户 {$user->email} 剩余时间不足 {$requiredDays} 天，跳过重置");
                     return false;
                 }
             }
+
+            $originalExpiredAt = $user->expired_at;
+            $originalNextResetAt = $user->next_reset_at;
 
             DB::beginTransaction();
 
@@ -153,7 +168,21 @@ class Plugin extends AbstractPlugin
             DB::commit();
 
             $resetMethodText = $this->getResetMethodText($resetMethod, $isCustomPeriod);
-            Log::warning("提前重置用户 {$user->email}，策略：{$resetMethodText}");
+
+            $logContext = [
+                'user_id' => $user->id,
+                'email' => $user->email,
+                'strategy' => $resetMethodText,
+                'expired_at_before' => $this->formatTimestamp($originalExpiredAt),
+                'expired_at_after' => $this->formatTimestamp($user->expired_at),
+            ];
+
+            if ($user->next_reset_at !== $originalNextResetAt) {
+                $logContext['next_reset_at_before'] = $this->formatTimestamp($originalNextResetAt);
+                $logContext['next_reset_at_after'] = $this->formatTimestamp($user->next_reset_at);
+            }
+
+            Log::warning('提前重置用户流量', $logContext);
 
             return true;
         } catch (\Exception $e) {
@@ -314,5 +343,17 @@ class Plugin extends AbstractPlugin
         ];
 
         return $mapping[$resetMethod] ?? '未知方式';
+    }
+
+    /**
+     * 将时间戳格式化为可读字符串。
+     */
+    protected function formatTimestamp(?int $timestamp): ?string
+    {
+        if (!$timestamp) {
+            return null;
+        }
+
+        return date('Y-m-d H:i:s', $timestamp);
     }
 }
