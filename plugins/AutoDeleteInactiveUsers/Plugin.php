@@ -182,7 +182,6 @@ class Plugin extends AbstractPlugin
     {
         return User::query()
             ->where('is_admin', false) // 非管理员
-            ->whereNull('last_login_at') // 从未登录
             ->whereNull('plan_id') // 无套餐
             ->where('transfer_enable', 0) // 无流量
             ->where('expired_at', 0) // 未设置到期时间

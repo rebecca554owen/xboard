@@ -72,8 +72,6 @@ class Plugin extends AbstractPlugin
                 return;
             }
 
-            Log::info("扫描到 " . $userIds->count() . " 个流量耗尽的用户");
-
             $successCount = 0;
             $userIds->chunk($batchSize)->each(function ($chunkedUserIds) use (&$successCount) {
                 $users = User::with('plan')
@@ -89,7 +87,7 @@ class Plugin extends AbstractPlugin
             });
 
             if ($successCount > 0) {
-                Log::info("成功重置了 {$successCount} 个用户的流量");
+                Log::info("扫描到 " . $userIds->count() . " 个流量耗尽的用户，成功重置了 {$successCount} 个用户的流量");
             }
         } catch (\Exception $e) {
             Log::error('扫描执行失败', ['error' => $e->getMessage()]);
@@ -345,6 +343,7 @@ class Plugin extends AbstractPlugin
         return $mapping[$resetMethod] ?? '未知方式';
     }
 
+  
     /**
      * 将时间戳格式化为可读字符串。
      */

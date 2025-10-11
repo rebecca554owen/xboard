@@ -90,7 +90,7 @@ class KnowledgeController extends Controller
             $this->formatAccessData($knowledge['body']);
         }
         $subscribeUrl = Helper::getSubscribeUrl($user['token']);
-        $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl);
+        $knowledge['body'] = $this->replacePlaceholders($knowledge['body'], $subscribeUrl, $user);
 
         return $knowledge;
     }
@@ -108,7 +108,7 @@ class KnowledgeController extends Controller
         $this->applyReplacementRules($body, $rules);
     }
 
-    private function replacePlaceholders(string $body, string $subscribeUrl): string
+    private function replacePlaceholders(string $body, string $subscribeUrl, User $user): string
     {
         $rules = [
             [
@@ -132,6 +132,17 @@ class KnowledgeController extends Controller
                 'replacement' => str_replace(['+', '/', '='], ['-', '_', ''], base64_encode($subscribeUrl))
             ]
         ];
+
+        //add onclick
+        $code = "填写授权码"; //授权码
+        $onClick_Href = $code."|".$user["email"]."|".$user["token"];
+        $encrypted = openssl_encrypt($onClick_Href, 'aes-128-cbc', "apps_connect_key", false, "8c97f304422a60e0");
+        $rules[] = [
+            'type' => 'string',
+            'search' => '{{userOneclick}}',
+            'replacement' => "appsconnect://".$encrypted
+        ];
+        //end onlick
 
         $this->applyReplacementRules($body, $rules);
         return $body;
