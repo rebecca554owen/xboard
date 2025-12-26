@@ -112,7 +112,10 @@ class Del extends Start
                 'confirm' => $confirm,
             ]);
 
-            $this->telegramService->sendMessage($message->chat_id, '❌ 操作失败，请检查日志');
+            $this->telegramService->sendMessage(
+                $message->chat_id,
+                '❌ 操作失败：' . $exception->getMessage()
+            );
         }
     }
 
@@ -192,7 +195,10 @@ class Del extends Start
                 'confirm' => $confirm,
             ]);
 
-            $this->telegramService->sendMessage($message->chat_id, '❌ 操作失败，请检查日志');
+            $this->telegramService->sendMessage(
+                $message->chat_id,
+                '❌ 操作失败：' . $exception->getMessage()
+            );
         }
     }
 
@@ -322,6 +328,28 @@ class Del extends Start
 
     private function deleteCandidates(int $registerDays, ?int $expiredDays): int
     {
+        // 无效用户：直接批量删除（无关联数据）
+        if ($expiredDays === null) {
+            // 先查询出作为邀请人的用户 ID
+            $inviterIds = DB::table('v2_user')
+                ->whereNotNull('invite_user_id')
+                ->pluck('invite_user_id')
+                ->unique()
+                ->toArray();
+
+            return DB::table('v2_user')
+                ->where('is_admin', false)
+                ->whereNull('plan_id')
+                ->where('transfer_enable', 0)
+                ->where('expired_at', 0)
+                ->where('balance', 0)
+                ->where('commission_balance', 0)
+                ->where('created_at', '<', time() - ($registerDays * 86400))
+                ->whereNotIn('id', $inviterIds)
+                ->delete();
+        }
+
+        // 过期用户：需要级联删除关联数据
         $deleted = 0;
 
         while (true) {
@@ -341,10 +369,15 @@ class Del extends Start
                 DB::commit();
             } catch (\Throwable $exception) {
                 DB::rollBack();
+
+                $error = '删除用户失败：' . $exception->getMessage();
                 Log::error('批次删除用户失败', [
                     'batch_size' => $candidates->count(),
                     'error' => $exception->getMessage()
                 ]);
+
+                // 发送错误消息给 bot
+                throw new \Exception($error);
             }
 
             if ($candidates->count() < self::BATCH_SIZE) {
@@ -414,10 +447,15 @@ class Del extends Start
 
     private function deleteUserWithoutTransaction(User $user): void
     {
-        $user->orders()->delete();
+        // 删除订单
+        DB::table('v2_order')->where('user_id', $user->id)->delete();
+        // 删除邀请码
         $user->codes()->delete();
-        $user->stat()->delete();
+        // 删除用户统计
+        DB::table('v2_stat')->where('user_id', $user->id)->delete();
+        // 删除工单
         $user->tickets()->delete();
+        // 删除用户
         $user->delete();
 
         Log::warning(sprintf(
