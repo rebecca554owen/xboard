@@ -1,7 +1,7 @@
 {
     "name": "Bot 查询数据报表",
     "code": "baobiao",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "每日运营数据统计与报告",
     "author": "周宇航",
     "require": {

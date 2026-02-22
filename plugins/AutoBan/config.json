@@ -1,7 +1,7 @@
 {
   "name": "每日流量超出阈值自动封禁，定时解禁",
   "code": "auto_ban",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "type": "feature",
   "description": "根据每日流量使用情况自动封禁或解禁用户。",
   "author": "周宇航",

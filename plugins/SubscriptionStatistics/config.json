@@ -1,7 +1,7 @@
 {
     "name": "订阅访问统计",
     "code": "subscription_statistics",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "description": "统计用户订阅访问行为，通过Telegram查看排行数据",
     "author": "周宇航",
     "require": {

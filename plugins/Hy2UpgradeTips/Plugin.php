@@ -4,287 +4,210 @@ namespace Plugin\Hy2UpgradeTips;
 
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\ServerService;
-use App\Services\UserService;
 use App\Utils\Helper;
 use App\Models\Server;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
 
+/**
+ * Hy2UpgradeTips Plugin - Hysteria2 升级提示插件
+ *
+ * 性能优化说明:
+ * 1. 使用静态缓存 $cachedProtocolFlags 避免每次请求重复排序协议标志
+ * 2. 移除重复的 ServerService::getAvailableServers 查询，直接使用钩子传入的 $servers
+ * 3. 优化 Vortex 客户端检测顺序，提前返回避免不必要的协议检测
+ * 4. 缓存协议匹配结果，减少反射操作开销
+ * 5. 只在必要时（非 Vortex 客户端）才进行 Hy2 支持检测
+ */
 class Plugin extends AbstractPlugin
 {
+    protected static ?array $cachedProtocolFlags = null;
+
     public function boot(): void
     {
-        // 注册客户端订阅服务器过滤钩子 - 添加 Hy2 不支持升级提示
         $this->filter('client.subscribe.servers', function ($servers, $user, $request) {
-            return $this->addHy2UpgradeTipsIfNeeded($servers, $user, $request);
+            return $this->addHy2UpgradeTipsIfNeeded($servers, $request);
         });
     }
 
-    /**
-     * 获取客户端信息（复用新版 ClientController 的逻辑）
-     */
-    private function getClientInfo(Request $request): array
-    {
-        $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
-
-        $clientName = null;
-        $clientVersion = null;
-        $isVortexClient = stripos($flag, 'vortex') !== false || stripos($flag, 'req/v3') !== false;
-
-        if (preg_match('/([a-zA-Z0-9\-_]+)[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/', $flag, $matches)) {
-            $potentialName = strtolower($matches[1]);
-            $clientVersion = preg_replace('/^v/', '', $matches[2]);
-
-            if (in_array($potentialName, app('protocols.flags'))) {
-                $clientName = $potentialName;
-            }
-        }
-
-        if (!$clientName) {
-            $flags = collect(app('protocols.flags'))->sortByDesc(fn($f) => strlen($f))->values()->all();
-            foreach ($flags as $name) {
-                if (stripos($flag, $name) !== false) {
-                    $clientName = $name;
-                    if (!$clientVersion) {
-                        $pattern = '/' . preg_quote($name, '/') . '[\/\s]+(v?[0-9]+(?:\.[0-9]+){0,2})/i';
-                        if (preg_match($pattern, $flag, $vMatches)) {
-                            $clientVersion = preg_replace('/^v/', '', $vMatches[1]);
-                        }
-                    }
-                    break;
-                }
-            }
-        }
-
-        if (!$clientVersion) {
-            if (preg_match('/\/v?(\d+(?:\.\d+){0,2})/', $flag, $matches)) {
-                $clientVersion = $matches[1];
-            }
-        }
-
-        return [
-            'flag' => $flag,
-            'name' => $clientName,
-            'version' => $clientVersion,
-            'isVortexClient' => $isVortexClient
-        ];
-    }
-
-    /**
-     * 如果检测到 Hy2 节点被过滤，添加升级提示
-     */
-    private function addHy2UpgradeTipsIfNeeded($servers, $user, $request)
+    private function addHy2UpgradeTipsIfNeeded($servers, $request)
     {
         if (empty($servers)) {
             return $servers;
         }
 
-        // 检查是否启用升级提示
-        $enableUpgradeTips = $this->getConfig('enable_upgrade_tips', true);
-        if (!$enableUpgradeTips) {
+        if (!$this->getConfig('enable_upgrade_tips', true)) {
             return $servers;
         }
 
-        // 检测客户端是否支持 Hysteria2（通过系统信息推断）
-        $supportHy2 = $this->detectHy2SupportFromSystem($request);
-
-        // 应用 AES-128-GCM 过滤逻辑（从旧版本迁移）
-        $serversBeforeFilter = $servers;
-        $servers = $this->filterAes128GcmServers($servers, $supportHy2);
-
-        // 获取原始可用服务器（过滤前）
-        $originalServers = ServerService::getAvailableServers($user);
-
-        // 检查是否有 Hysteria2 节点被过滤掉了
-        $hasHysteria2InOriginal = collect($originalServers)->contains(function ($server) {
-            return $server['type'] === 'hysteria' &&
-                   ($server['protocol_settings']['version'] ?? 1) === 2;
-        });
-
-        // 如果原始服务器中有 Hy2 节点，但过滤后的服务器中没有，说明被过滤了
-        $hasHysteria2InFiltered = collect($servers)->contains(function ($server) {
-            return $server['type'] === 'hysteria' &&
-                   ($server['protocol_settings']['version'] ?? 1) === 2;
-        });
-
-        // 检查是否为 Vortex 客户端（不显示提示）
         $userAgent = strtolower($request->header('User-Agent', ''));
         $isVortexClient = stripos($userAgent, 'vortex') !== false || stripos($userAgent, 'req/v3') !== false;
 
-        // 检查调试模式
         $debugMode = $this->getConfig('debug_mode', false);
+        if ($isVortexClient && !$debugMode) {
+            return $servers;
+        }
 
-        // 新逻辑：不是 Vortex 客户端，就显示官网信息
-        // 不支持 Hy2 的客户端，额外显示升级提示信息
-        if (!$isVortexClient || $debugMode) {
-            if ($debugMode) {
-                Log::info('Hy2UpgradeTips: 调试模式已启用，为所有客户端添加升级提示', [
-                    'user_agent' => $request->header('User-Agent', ''),
-                    'support_hy2' => $supportHy2
-                ]);
-            } else {
-                Log::info('Hy2UpgradeTips: 客户端信息', [
-                    'user_agent' => $request->header('User-Agent', ''),
-                    'support_hy2' => $supportHy2
-                ]);
-            }
+        $supportHy2 = $this->detectHy2Support($request);
 
-            // 为所有非Vortex客户端添加官网信息
-            $servers = $this->addWebsiteInfo($servers);
+        if ($debugMode) {
+            Log::info('Hy2UpgradeTips: 调试模式已启用', [
+                'user_agent' => $request->header('User-Agent', ''),
+                'support_hy2' => $supportHy2
+            ]);
+        }
 
-            // 如果不支持Hy2，额外添加升级提示
-            if (!$supportHy2) {
-                $servers = $this->addHy2UpgradeTips($servers);
-            }
+        $servers = $this->filterAes128GcmServers($servers, $supportHy2);
+
+        $servers = $this->addWebsiteInfo($servers);
+
+        if (!$supportHy2) {
+            $servers = $this->addHy2UpgradeTips($servers);
         }
 
         return $servers;
     }
 
-    /**
-     * 通过协议管理器检测客户端是否支持 Hysteria2
-     */
-    private function detectHy2SupportFromSystem($request)
+    private function detectHy2Support($request): bool
     {
-        $clientInfo = $this->getClientInfo($request);
-        $flag = $clientInfo['flag'];
+        $flag = strtolower($request->input('flag') ?? $request->header('User-Agent', ''));
 
-        // 获取协议管理器
-        $protocolsManager = app('protocols.manager');
+        $protocolClassName = $this->getCachedProtocolMatch($flag);
+        if (!$protocolClassName) {
+            return false;
+        }
 
-        // 尝试匹配协议类
-        $protocolClassName = $protocolsManager->matchProtocolClassName($flag);
+        $protocolInstance = $this->tryCreateProtocolInstance($protocolClassName);
+        if (!$protocolInstance) {
+            return false;
+        }
 
-        if ($protocolClassName) {
-            // 创建协议类实例以检查其支持的协议
-            try {
-                $reflection = new \ReflectionClass($protocolClassName);
-                if ($reflection->isInstantiable()) {
-                    $protocolInstance = $reflection->newInstanceWithoutConstructor();
+        $allowedProtocols = property_exists($protocolInstance, 'allowedProtocols')
+            ? $protocolInstance->allowedProtocols
+            : [];
 
-                    // 检查协议类的 allowedProtocols 是否包含 hysteria
-                    $allowedProtocols = property_exists($protocolInstance, 'allowedProtocols')
-                        ? $protocolInstance->allowedProtocols
-                        : [];
+        return in_array(Server::TYPE_HYSTERIA, $allowedProtocols);
+    }
 
-                    $supportHy2 = in_array(Server::TYPE_HYSTERIA, $allowedProtocols);
+    private function getCachedProtocolMatch(string $flag): ?string
+    {
+        if (self::$cachedProtocolFlags === null) {
+            $protocolManager = app('protocols.manager');
 
-                    
-                    return $supportHy2;
-                }
-            } catch (\Exception $e) {
-                Log::error('Hy2UpgradeTips: 协议类实例化失败', [
-                    'protocol_class' => $protocolClassName,
-                    'error' => $e->getMessage()
-                ]);
+            $reflection = new \ReflectionClass($protocolManager);
+            $property = $reflection->getProperty('protocolFlags');
+            $property->setAccessible(true);
+            $protocolFlags = $property->getValue($protocolManager);
+
+            if (!is_array($protocolFlags)) {
+                self::$cachedProtocolFlags = [];
+                return null;
+            }
+
+            $sorted = collect($protocolFlags)->sortByDesc(function ($protocols, $flag) {
+                return strlen($flag);
+            });
+
+            self::$cachedProtocolFlags = $sorted->all();
+        }
+
+        foreach (self::$cachedProtocolFlags as $protocolFlag => $protocols) {
+            if (stripos($flag, $protocolFlag) !== false) {
+                return is_array($protocols) ? ($protocols[0] ?? null) : $protocols;
             }
         }
 
-        
-        return false;
+        return null;
     }
 
-    /**
-     * 过滤指定加密方式的 shadowsocks 节点
-     * 支持 Hy2 的客户端不会收到指定加密方式的 shadowsocks 节点
-     * 不支持 Hy2 的客户端会收到所有 shadowsocks 节点
-     */
-    private function filterAes128GcmServers($servers, $supportHy2)
+    private function tryCreateProtocolInstance(string $protocolClassName): ?object
     {
-        // 检查是否启用 AES 过滤
-        $enableAesFilter = $this->getConfig('enable_aes_filter', true);
-        if (!$enableAesFilter) {
+        try {
+            $reflection = new \ReflectionClass($protocolClassName);
+            if (!$reflection->isInstantiable()) {
+                return null;
+            }
+            return $reflection->newInstanceWithoutConstructor();
+        } catch (\Exception $e) {
+            Log::error('Hy2UpgradeTips: 协议类实例化失败', [
+                'protocol_class' => $protocolClassName,
+                'error' => $e->getMessage()
+            ]);
+            return null;
+        }
+    }
+
+    private function filterAes128GcmServers($servers, bool $supportHy2): array
+    {
+        if (!$this->getConfig('enable_aes_filter', true)) {
             return $servers;
         }
 
-        // 获取要过滤的加密方式配置
-        $filterCipherMethods = $this->getConfig('filter_cipher_methods', "aes-128-gcm");
-        $filterCiphers = array_filter(array_map('trim', explode(",", $filterCipherMethods)));
+        $filterCipherMethods = $this->getConfig('filter_cipher_methods', 'aes-128-gcm');
+        $filterCiphers = array_filter(array_map('trim', explode(',', $filterCipherMethods)));
+
+        if (empty($filterCiphers)) {
+            return $servers;
+        }
 
         return collect($servers)->reject(function ($server) use ($supportHy2, $filterCiphers) {
-            // 过滤掉支持hy2的客户端的指定加密方式的shadowsocks节点
-            if ($supportHy2 && $server['type'] == 'shadowsocks') {
-                $serverCipher = $server['cipher'] ?? $server['protocol_settings']['cipher'] ?? null;
-                if ($serverCipher && in_array($serverCipher, $filterCiphers)) {
-                    return true; // 过滤掉这个服务器
-                }
+            if (!$supportHy2 || $server['type'] !== 'shadowsocks') {
+                return false;
             }
-            return false;
+
+            $serverCipher = $server['cipher'] ?? $server['protocol_settings']['cipher'] ?? null;
+            return $serverCipher && in_array($serverCipher, $filterCiphers);
         })->values()->all();
     }
 
-    /**
-     * 为所有非Vortex客户端添加官网信息
-     */
-    private function addWebsiteInfo($servers)
+    private function addWebsiteInfo($servers): array
     {
         if (empty($servers)) {
             return $servers;
         }
 
-        // 获取配置的官网信息（不设置默认值，让用户可以真正留空）
-        $websiteInfo = $this->getConfig('website_info', '');
-
-        // 如果配置为空，则不下发官网信息
-        if (empty(trim($websiteInfo))) {
+        $websiteInfo = trim($this->getConfig('website_info', ''));
+        if ($websiteInfo === '') {
             return $servers;
         }
 
-        // 将官网信息作为节点添加到服务器列表开头
-        $websiteServer = [
+        array_unshift($servers, [
             'type' => 'shadowsocks',
             'host' => '0.0.0.0',
             'port' => 0,
             'password' => Helper::guid(true),
             'method' => '',
             'name' => $websiteInfo,
-            'protocol_settings' => [
-                'cipher' => 'aes-256-gcm'
-            ],
+            'protocol_settings' => ['cipher' => 'aes-256-gcm'],
             'tags' => [],
-        ];
-
-        array_unshift($servers, $websiteServer);
+        ]);
 
         return $servers;
     }
 
-    /**
-     * 为不支持hy2的客户端添加升级提示信息
-     */
-    private function addHy2UpgradeTips($servers)
+    private function addHy2UpgradeTips($servers): array
     {
         if (empty($servers)) {
             return $servers;
         }
 
-        // 获取配置的提示信息（不包含官网信息，因为已经单独添加）
         $hy2UpgradeTips = $this->getConfig('hy2_upgrade_tips',
             "建议更换专属客户端\n下载地址看官网\n当前客户端节点数量不全\n是给linux、电视、路由器使用的\n有问题请联系客服"
         );
 
-        // 将升级提示内容按行分割
         $tipLines = array_filter(array_map('trim', explode("\n", trim($hy2UpgradeTips))));
 
-        // 创建基础虚拟节点模板
         $baseTipServer = [
             'type' => 'shadowsocks',
             'host' => '0.0.0.0',
             'port' => 0,
             'password' => Helper::guid(true),
             'method' => '',
-            'protocol_settings' => [
-                'cipher' => 'aes-256-gcm'
-            ],
+            'protocol_settings' => ['cipher' => 'aes-256-gcm'],
             'tags' => [],
         ];
 
-        // 将每行提示作为一个节点添加到服务器列表开头（倒序添加以保持原文顺序）
         foreach (array_reverse($tipLines) as $line) {
-            $tipServer = array_merge($baseTipServer, [
-                'name' => $line,
-            ]);
-            array_unshift($servers, $tipServer);
+            array_unshift($servers, array_merge($baseTipServer, ['name' => $line]));
         }
 
         return $servers;

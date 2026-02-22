@@ -1,7 +1,7 @@
 {
     "code": "line_status_tip",
     "name": "自定义线路提醒（流量耗尽/套餐到期）",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "用户流量耗尽或套餐到期时，订阅下发一条自定义线路用于提醒用户",
     "author": "周宇航",
     "require": {
