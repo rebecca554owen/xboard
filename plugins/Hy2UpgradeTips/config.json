@@ -1,0 +1,48 @@
+{
+    "code": "hy2_upgrade_tips",
+    "name": "Hysteria2 升级提示插件",
+    "version": "1.0.0",
+    "description": "为不支持 Hysteria2 的客户端显示升级提示，引导用户使用支持 Hysteria2 的客户端",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enable_upgrade_tips": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用升级提示",
+            "description": "为不支持 Hysteria2 的客户端显示升级提示"
+        },
+        "website_info": {
+            "type": "text",
+            "default": "官网：",
+            "label": "官网信息",
+            "description": "显示给所有非Vortex客户端的官网信息，写什么就下发什么，留空则不下发"
+        },
+        "hy2_upgrade_tips": {
+            "type": "text",
+            "default": "建议更换专属客户端\n下载地址看官网\n当前客户端节点数量不全\n是给linux、电视、路由器使用的\n有问题请联系客服",
+            "label": "升级提示内容",
+            "description": "显示给不支持 Hysteria2 客户端的升级提示信息。每行将作为一个独立的节点显示"
+        },
+        "enable_aes_filter": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用 AES 节点过滤",
+            "description": "为支持 Hysteria2 的客户端过滤掉指定加密方式的 shadowsocks 节点"
+        },
+        "filter_cipher_methods": {
+            "type": "string",
+            "default": "aes-128-gcm",
+            "label": "要过滤的加密方式",
+            "description": "用逗号分隔多个加密方式，支持 Hysteria2 的客户端将不会收到这些加密方式的 shadowsocks 节点。留空则不过滤任何节点。"
+        },
+        "debug_mode": {
+            "type": "boolean",
+            "default": false,
+            "label": "调试模式",
+            "description": "启用后，所有客户端都会收到升级提示（用于测试文案显示效果）"
+        }
+    }
+}
