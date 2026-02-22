@@ -1,0 +1,24 @@
+{
+    "name": "Bot 查询数据报表",
+    "code": "baobiao",
+    "version": "1.0.2",
+    "description": "每日运营数据统计与报告",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enable_auto_report": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用自动日报",
+            "description": "是否启用每日自动发送报表"
+        },
+        "report_time": {
+            "type": "string",
+            "default": "09:00",
+            "label": "日报发送时间",
+            "description": "自动发送日报的时间（格式：HH:MM，24小时制）"
+        }
+    }
+}
