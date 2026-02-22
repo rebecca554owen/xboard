@@ -1,0 +1,30 @@
+{
+    "name": "订阅访问统计",
+    "code": "subscription_statistics",
+    "version": "1.0.1",
+    "description": "统计用户订阅访问行为，通过Telegram查看排行数据",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enabled": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用统计",
+            "description": "是否启用订阅访问统计"
+        },
+        "track_ua": {
+            "type": "boolean",
+            "default": true,
+            "label": "记录用户代理",
+            "description": "是否记录User-Agent信息"
+        },
+        "track_ip": {
+            "type": "boolean",
+            "default": true,
+            "label": "记录IP地址",
+            "description": "是否记录IP地址"
+        }
+    }
+}
