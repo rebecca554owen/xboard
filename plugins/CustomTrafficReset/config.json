@@ -1,0 +1,26 @@
+{
+    "name": "自定义套餐重置间隔周期",
+    "code": "custom_traffic_reset",
+    "version": "1.0.2",
+    "description": "按套餐规则自动计算下一次流量重置时间。",
+    "author": "周宇航",
+    "require": {
+        "xboard": "^1.0.0"
+    },
+    "config": {
+        "enabled": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用插件",
+            "description": "关闭后保留原有流量重置逻辑，不再写入 next_reset_at。"
+        },
+        "sync_interval_minutes": {
+            "type": "number",
+            "default": 0,
+            "min": 0,
+            "max": 60,
+            "label": "巡检间隔（分钟）",
+            "description": "0 表示不自动巡检，可临时设置为 N 分钟以扫描并纠正带标签用户的 next_reset_at。"
+        }
+    }
+}
