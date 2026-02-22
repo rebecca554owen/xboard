@@ -1,7 +1,7 @@
 {
     "name": "自动删除无效用户",
     "code": "auto_delete_inactive_users",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "定时清理无效用户和过期用户，支持试运行模式和安全保护。",
     "author": "周宇航",
     "require": {

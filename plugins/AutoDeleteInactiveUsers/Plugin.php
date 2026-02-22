@@ -13,22 +13,17 @@ use Illuminate\Support\Facades\Log;
 class Plugin extends AbstractPlugin
 {
     private const LOCK_KEY = 'plugin:auto_delete_inactive_users:lock';
-    private const LOCK_TTL = 300; // 缓存锁有效期 5 分钟，避免并发任务重复执行
+    private const LOCK_TTL = 300;
 
     public function boot(): void
     {
-        // 插件启动逻辑（当前无特殊配置）
     }
 
-    /**
-     * 注册定时任务，根据配置频率执行清理逻辑。
-     */
     public function schedule(Schedule $schedule): void
     {
         $frequency = $this->getConfig('schedule_frequency', 'daily');
 
         $task = $schedule->call(function (): void {
-            // 定时任务始终执行，根据 enable_auto_delete 决定是否真实删除
             $this->deleteInactiveUsers();
         });
 
@@ -40,8 +35,6 @@ class Plugin extends AbstractPlugin
                 $task->hourly();
                 break;
             case 'daily':
-                $task->dailyAt('00:00');
-                break;
             default:
                 $task->dailyAt('00:00');
                 break;
@@ -50,9 +43,6 @@ class Plugin extends AbstractPlugin
         $task->name('auto_delete_inactive_users')->onOneServer();
     }
 
-    /**
-     * 清理无效用户和过期n天未续费用户，支持试运行模式。
-     */
     protected function deleteInactiveUsers(): void
     {
         if (!Cache::add(self::LOCK_KEY, 1, self::LOCK_TTL)) {
@@ -65,17 +55,16 @@ class Plugin extends AbstractPlugin
         $batchSize = max(1, (int) $this->getConfig('batch_size', 100));
         $enableAutoDelete = (bool) $this->getConfig('enable_auto_delete', false);
         $deleteExpiredAfterDays = max(0, (int) $this->getConfig('delete_expired_users_after_days', 0));
-        $invalidUserCount = 0;
-        $expiredUserCount = 0;
 
         try {
-            // 试运行模式：同时统计两种用户
             $invalidUserCount = $this->countInvalidUsers($days);
             $expiredUserCount = $this->countExpiredUsers($days, $deleteExpiredAfterDays);
 
             if ($enableAutoDelete) {
-                // 真实删除模式
                 $totalDeleted = 0;
+                $retryCount = 0;
+                $maxRetries = 3;
+
                 while (true) {
                     $candidates = $this->queryCandidateUsers($days, $batchSize, $deleteExpiredAfterDays);
                     if ($candidates->isEmpty()) {
@@ -92,45 +81,42 @@ class Plugin extends AbstractPlugin
                     }
 
                     if ($batchDeleted === 0) {
-                        continue;
+                        ++$retryCount;
+                        if ($retryCount >= $maxRetries) {
+                            Log::warning('达到最大重试次数，停止删除', [
+                                'total_deleted' => $totalDeleted,
+                                'retry_count' => $retryCount,
+                            ]);
+                            break;
+                        }
+                    } else {
+                        $retryCount = 0;
                     }
                 }
 
-                // 更新统计变量用于最终日志
                 if ($deleteExpiredAfterDays > 0) {
                     $expiredUserCount = $totalDeleted;
+                    $invalidUserCount = 0;
                 } else {
                     $invalidUserCount = $totalDeleted;
+                    $expiredUserCount = 0;
                 }
             }
 
-            if (!$enableAutoDelete) {
-                // 试运行模式：显示两种用户的统计结果
-                if ($deleteExpiredAfterDays > 0) {
-                    Log::warning(sprintf(
-                        '[试运行]注册%d天以上无效用户%d个，过期时间大于%d天用户%d个',
-                        $days,
-                        $invalidUserCount,
-                        $deleteExpiredAfterDays,
-                        $expiredUserCount
-                    ));
-                } else {
-                    Log::warning(sprintf(
-                        '[试运行]注册%d天以上无效用户%d个，所有过期用户%d个',
-                        $days,
-                        $invalidUserCount,
-                        $expiredUserCount
-                    ));
-                }
-            } else {
-                // 真实删除模式：显示删除结果
-                $totalDeleted = $invalidUserCount + $expiredUserCount;
-                if ($totalDeleted > 0) {
-                    Log::info(sprintf(
-                        '完成：共删除 %d 个用户',
-                        $totalDeleted
-                    ));
-                }
+            $totalDeleted = $invalidUserCount + $expiredUserCount;
+
+            if (!$enableAutoDelete && $totalDeleted > 0) {
+                $template = $deleteExpiredAfterDays > 0
+                    ? '[试运行]注册%d天以上无效用户%d个，过期时间大于%d天用户%d个'
+                    : '[试运行]注册%d天以上无效用户%d个，所有过期用户%d个';
+
+                $params = $deleteExpiredAfterDays > 0
+                    ? [$days, $invalidUserCount, $deleteExpiredAfterDays, $expiredUserCount]
+                    : [$days, $invalidUserCount, $expiredUserCount];
+
+                Log::warning(vsprintf($template, $params));
+            } elseif ($enableAutoDelete && $totalDeleted > 0) {
+                Log::info(sprintf('完成：共删除 %d 个用户', $totalDeleted));
             }
         } catch (\Throwable $exception) {
             Log::error('执行过程中发生异常', [
@@ -142,88 +128,108 @@ class Plugin extends AbstractPlugin
     }
 
     /**
-     * 查询符合清理条件的用户列表。
-     *
      * @return Collection<int, User>
      */
     protected function queryCandidateUsers(int $days, int $batchSize, int $deleteExpiredAfterDays = 0): Collection
     {
-        $query = User::query()
-            ->where('is_admin', false); // 非管理员
+        // 性能优化：使用 LEFT JOIN 替代 whereNotIn 子查询
+        // 优化前：whereNotIn 需要执行子查询，随着用户表增长性能下降
+        // 优化后：LEFT JOIN 可以利用索引，查询效率更高
+        $query = $this->buildBaseQuery();
 
         if ($deleteExpiredAfterDays > 0) {
-            // 过期用户清理模式：包含过期超过指定天数的用户
-            $query->where('expired_at', '>', 0) // 已设置过期时间
-                  ->where('expired_at', '<', time() - ($deleteExpiredAfterDays * 86400)) // 过期超过指定天数
-                  ->where('balance', 0) // 余额为0
-                  ->where('commission_balance', 0); // 佣金余额为0
+            // 删除过期用户：过期时间大于指定天数
+            $query->where('v2_user.expired_at', '>', 0)
+                  ->where('v2_user.expired_at', '<', time() - ($deleteExpiredAfterDays * 86400));
         } else {
-            // 基础清理模式：只删除无套餐、无流量、未设置到期时间的用户
-            $query->whereNull('plan_id') // 无套餐
-                  ->where('transfer_enable', 0) // 无流量
-                  ->where('expired_at', 0) // 未设置到期时间
-                  ->where('balance', 0) // 余额为0
-                  ->where('commission_balance', 0) // 佣金余额为0
-                  ->whereNotIn('id', User::query()
-                      ->whereNotNull('invite_user_id')
-                      ->select('invite_user_id')
-                  ); // 无邀请关系
+            // 删除无效用户：未订阅、无流量、未过期且从未邀请过他人
+            // 性能优化：LEFT JOIN 查找从未作为邀请人的用户
+            // 所需索引：CREATE INDEX idx_invited_user ON users(invite_user_id, id);
+            $query->leftJoin('v2_user as invited', 'invited.invite_user_id', 'v2_user.id')
+                  ->whereNull('invited.id')  // 从未邀请过他人
+                  ->whereNull('v2_user.plan_id')      // 未订阅
+                  ->where('v2_user.transfer_enable', 0)  // 无流量
+                  ->where('v2_user.expired_at', 0);   // 未过期
         }
 
-        return $query->where('created_at', '<', time() - ($days * 86400)) // 注册超过指定天数
-                     ->limit($batchSize) // 限制批次大小
+        // 性能优化：添加时间过滤，利用 created_at 索引
+        // 所需索引：CREATE INDEX idx_cleanup_basic ON users(is_admin, balance, commission_balance, created_at);
+        // 重要：使用 select 确保只返回主表字段，避免 LEFT JOIN 导致的 NULL 值污染
+        return $query->where('v2_user.created_at', '<', time() - ($days * 86400))
+                     ->select('v2_user.*')  // 只选择主表字段，避免 JOIN 污染
+                     ->limit($batchSize)
                      ->get();
     }
 
     /**
-     * 统计无效用户数量（基础清理模式）
+     * 统计无效用户数量
+     *
+     * 性能优化：使用 LEFT JOIN 替代 whereNotIn 子查询
+     * 优化前：whereNotIn 需要执行子查询，随着用户表增长性能下降
+     * 优化后：LEFT JOIN 可以利用索引，查询效率更高
+     *
+     * 所需索引：
+     * - CREATE INDEX idx_invited_user ON users(invite_user_id, id);
+     * - CREATE INDEX idx_cleanup_basic ON users(is_admin, balance, commission_balance, created_at);
+     * - CREATE INDEX idx_cleanup_invalid ON users(plan_id, transfer_enable, expired_at);
      */
     protected function countInvalidUsers(int $days): int
     {
-        return User::query()
-            ->where('is_admin', false) // 非管理员
-            ->whereNull('plan_id') // 无套餐
-            ->where('transfer_enable', 0) // 无流量
-            ->where('expired_at', 0) // 未设置到期时间
-            ->where('balance', 0) // 余额为0
-            ->where('commission_balance', 0) // 佣金余额为0
-            ->whereNotIn('id', User::query()
-                ->whereNotNull('invite_user_id')
-                ->select('invite_user_id')
-            ) // 无邀请关系
-            ->where('created_at', '<', time() - ($days * 86400)) // 注册超过指定天数
+        return $this->buildBaseQuery()
+            ->leftJoin('v2_user as invited', 'invited.invite_user_id', 'v2_user.id')
+            ->whereNull('invited.id')  // 从未邀请过他人
+            ->whereNull('v2_user.plan_id')      // 未订阅
+            ->where('v2_user.transfer_enable', 0)  // 无流量
+            ->where('v2_user.expired_at', 0)   // 未过期
+            ->where('v2_user.created_at', '<', time() - ($days * 86400))
             ->count();
     }
 
     /**
-     * 统计过期用户数量（过期用户清理模式）
+     * 统计过期用户数量
+     *
+     * 性能优化：利用 expired_at 和 created_at 索引进行范围查询
+     * 所需索引：
+     * - CREATE INDEX idx_cleanup_basic ON users(is_admin, balance, commission_balance, created_at);
+     * - CREATE INDEX idx_cleanup_expired ON users(expired_at, created_at);
      */
     protected function countExpiredUsers(int $days, int $expiredDays): int
     {
-        $query = User::query()
-            ->where('is_admin', false) // 非管理员
-            ->where('expired_at', '>', 0) // 已设置过期时间
-            ->where('balance', 0) // 余额为0
-            ->where('commission_balance', 0) // 佣金余额为0
-            ->where('created_at', '<', time() - ($days * 86400)); // 注册超过指定天数
-
-        if ($expiredDays > 0) {
-            // 统计过期超过指定天数的用户
-            $query->where('expired_at', '<', time() - ($expiredDays * 86400)); // 过期超过指定天数
-        } else {
-            // 统计所有过期用户
-            $query->where('expired_at', '<', time()); // 已过期
-        }
-
-        return $query->count();
+        return $this->buildBaseQuery()
+            ->where('v2_user.expired_at', '>', 0)
+            ->where('v2_user.created_at', '<', time() - ($days * 86400))
+            ->where('v2_user.expired_at', '<', time() - ($expiredDays * 86400))
+            ->count();
     }
 
     /**
-     * 删除指定用户及关联业务数据。
+     * 构建基础查询
+     *
+     * 性能优化：基础条件过滤，利用等值查询索引
+     * 所需索引：CREATE INDEX idx_cleanup_basic ON users(is_admin, balance, commission_balance);
+     *
+     * @return \Illuminate\Database\Eloquent\Builder
      */
+    private function buildBaseQuery(): \Illuminate\Database\Eloquent\Builder
+    {
+        return User::query()
+            ->where('v2_user.is_admin', false)
+            ->where('v2_user.balance', 0)
+            ->where('v2_user.commission_balance', 0);
+    }
+
     protected function deleteUser(User $user): bool
     {
         try {
+            // 验证用户 ID 有效性，防止删除无效数据
+            if (!$user->id || $user->id <= 0) {
+                Log::error('尝试删除无效用户', [
+                    'user_id' => $user->id,
+                    'email' => $user->email ?? 'N/A',
+                ]);
+                return false;
+            }
+
             DB::beginTransaction();
 
             $user->orders()->delete();

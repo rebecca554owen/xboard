@@ -1,7 +1,7 @@
 {
     "name": "自定义套餐重置间隔周期",
     "code": "custom_traffic_reset",
-    "version": "1.0.2",
+    "version": "1.0.3",
     "description": "按套餐规则自动计算下一次流量重置时间。",
     "author": "周宇航",
     "require": {

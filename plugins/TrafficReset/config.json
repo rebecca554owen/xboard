@@ -1,7 +1,7 @@
 {
     "name": "流量耗尽自动重置",
     "code": "traffic_reset",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "description": "检测用户流量用尽后，自动缩短有效期并触发流量重置。",
     "author": "周宇航",
     "require": {
