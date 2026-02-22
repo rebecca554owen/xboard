@@ -1,0 +1,43 @@
+{
+  "name": "每日流量超出阈值自动封禁，定时解禁",
+  "code": "auto_ban",
+  "version": "1.0.2",
+  "type": "feature",
+  "description": "根据每日流量使用情况自动封禁或解禁用户。",
+  "author": "周宇航",
+  "require": {
+    "xboard": ">=1.0.0"
+  },
+  "config": {
+    "enable_auto_ban": {
+      "type": "boolean",
+      "default": true,
+      "label": "启用自动封禁",
+      "description": "根据今日流量统计封禁超出阈值的用户"
+    },
+    "daily_limit_gb": {
+      "type": "number",
+      "default": 300,
+      "label": "用户每日流量上限 (GB)",
+      "description": "用户今日流量超过该值将被封禁"
+    },
+    "scan_interval_minutes": {
+      "type": "number",
+      "default": 1,
+      "label": "扫描间隔 (分钟)",
+      "description": "自动封禁扫描的时间间隔，大于0的整数"
+    },
+    "enable_auto_unban": {
+      "type": "boolean",
+      "default": true,
+      "label": "启用每日解禁",
+      "description": "每天自动解禁所有被封禁用户"
+    },
+    "unban_time": {
+      "type": "string",
+      "default": "00:00",
+      "label": "解禁执行时间",
+      "description": "自动解禁任务的执行时间 (HH:MM)"
+    }
+  }
+}
