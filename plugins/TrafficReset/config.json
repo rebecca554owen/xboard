@@ -1,0 +1,55 @@
+{
+    "name": "流量耗尽自动重置",
+    "code": "traffic_reset",
+    "version": "1.0.3",
+    "description": "检测用户流量用尽后，自动缩短有效期并触发流量重置。",
+    "author": "周宇航",
+    "require": {
+        "xboard": "^1.0.0"
+    },
+    "config": {
+        "enable_auto_reset": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用自动重置",
+            "description": "关闭后仅保留系统手动重置，定时任务不会再触发流量重置。"
+        },
+        "schedule_frequency": {
+            "type": "select",
+            "default": "hourly",
+            "label": "定时任务频率",
+            "description": "配置定时检测的执行频率，用于扫描流量耗尽的用户。",
+            "options": [
+                {"value": "minutely", "label": "每分钟"},
+                {"value": "hourly", "label": "每小时"},
+                {"value": "daily", "label": "每天 00:00"}
+            ]
+        },
+        "batch_size": {
+            "type": "number",
+            "default": 100,
+            "min": 10,
+            "max": 10000,
+            "label": "批处理用户数量",
+            "description": "每批次最多处理的用户数，建议根据服务器性能调整。"
+        },
+        "auto_reset_on_exceed_monthly": {
+            "type": "boolean",
+            "default": true,
+            "label": "按月结日重置",
+            "description": "当套餐为【按月结日】重置方式且流量用尽时，是否允许提前执行重置。"
+        },
+        "auto_reset_on_exceed_first_day": {
+            "type": "boolean",
+            "default": true,
+            "label": "每月一号重置",
+            "description": "当套餐为【每月一号】重置方式且流量用尽时，是否允许提前执行重置。"
+        },
+        "auto_reset_on_exceed_custom": {
+            "type": "boolean",
+            "default": true,
+            "label": "自定义周期重置",
+            "description": "当套餐使用【自定义重置周期】且流量用尽时，是否允许提前执行重置。"
+        }
+    }
+}
