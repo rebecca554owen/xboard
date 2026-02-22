@@ -22,7 +22,6 @@ class Plugin extends AbstractPlugin
         $this->registerHooks();
     }
 
-  
     // ==================== 钩子注册 ====================
 
     /**
@@ -49,10 +48,13 @@ class Plugin extends AbstractPlugin
             if ($handled) return $handled;
 
             list($msg) = $data;
-            if ($msg->message_type === 'message' && $this->parseSubCommand($msg->text)) {
-                list($type, $days, $limit) = $this->parseSubCommand($msg->text);
-                $this->handleSubCommand($msg, $type, $days, $limit);
-                return true;
+            if ($msg->message_type === 'message') {
+                $parsed = $this->parseSubCommand($msg->text);
+                if ($parsed) {
+                    list($type, $days, $limit) = $parsed;
+                    $this->handleSubCommand($msg, $type, $days, $limit);
+                    return true;
+                }
             }
 
             return false;
@@ -115,6 +117,10 @@ class Plugin extends AbstractPlugin
 
     /**
      * 保存日志到数据库
+     *
+     * 存储策略：
+     * - data: 存储完整的日志数据（JSON格式），用于详细查询和分析
+     * - context: 存储关键字段摘要（JSON格式），用于快速索引和统计
      */
     private function saveLog(array $logData): void
     {
@@ -126,8 +132,21 @@ class Plugin extends AbstractPlugin
         $log->method = request()->method();
         $log->ip = $logData['ip'];
         $log->data = json_encode($logData);
-        $log->context = json_encode($logData);
+        $log->context = json_encode($this->extractContextSummary($logData));
         $log->save();
+    }
+
+    /**
+     * 提取上下文摘要
+     *
+     * 从完整日志数据中提取关键字段，用于快速索引和统计查询
+     */
+    private function extractContextSummary(array $logData): array
+    {
+        return [
+            'user_email' => $logData['user_email'],
+            'user_agent' => $logData['user_agent'],
+        ];
     }
 
     /**
@@ -143,14 +162,16 @@ class Plugin extends AbstractPlugin
 
     /**
      * 解析订阅命令
+     *
+     * 支持格式：
+     * - /sub - 综合报告
+     * - /sub [days] - 指定天数的综合报告
+     * - /sub ua - UA排行(默认20个)
+     * - /sub ua [limit|days] - UA排行，数字<=30视为天数，>30视为数量
+     * - /sub ua [days] [limit] - 指定天数和数量
      */
     private function parseSubCommand(string $text): ?array
     {
-        // 支持格式：
-        // /sub - 综合报告
-        // /sub ua - UA排行(默认20个)
-        // /sub ua 30 - UA排行30个
-        // /sub ua 7 30 - 7天内UA排行30个
         if (!preg_match('/^\/sub(\s+(user|ua|ip)(?:\s+(\d+)(?:\s+(\d+))?)?)?(\s+(\d+))?$/', $text, $matches)) {
             return null;
         }
@@ -158,33 +179,50 @@ class Plugin extends AbstractPlugin
         $type = $matches[2] ?? null;
 
         if ($type) {
-            // 有指定类型的命令
-            $days = 0;
-            $limit = 20; // 默认数量
-
-            if (isset($matches[3]) && isset($matches[4])) {
-                // 格式：/sub ua 7 30 (7天，30个)
-                $days = intval($matches[3]);
-                $limit = intval($matches[4]);
-            } elseif (isset($matches[3])) {
-                // 格式：/sub ua 30 或 /sub ua 7
-                $num = intval($matches[3]);
-                if ($num <= 30) {
-                    // 如果数字<=30，认为是天数（因为天数限制为30）
-                    $days = $num;
-                } else {
-                    // 如果数字>30，认为是数量
-                    $limit = $num;
-                }
-            }
-
-            $limit = max(1, min($limit, 100)); // 限制数量在1-100之间
-            return [$type, $days, $limit];
-        } else {
-            // 综合报告命令，可能带天数
-            $days = isset($matches[5]) ? intval($matches[5]) : 0;
-            return [null, $days, null];
+            return $this->parseTypedCommand($matches);
         }
+
+        return $this->parseSummaryCommand($matches);
+    }
+
+    /**
+     * 解析带类型的命令（如 /sub ua 7 30）
+     */
+    private function parseTypedCommand(array $matches): array
+    {
+        $type = $matches[2];
+        $days = 0;
+        $limit = 20;
+
+        if (isset($matches[3]) && isset($matches[4])) {
+            $days = intval($matches[3]);
+            $limit = intval($matches[4]);
+        } elseif (isset($matches[3])) {
+            $num = intval($matches[3]);
+            if ($num <= 30) {
+                $days = $num;
+            } else {
+                $limit = $num;
+            }
+        }
+
+        return [$type, $days, $this->validateLimit($limit)];
+    }
+
+    /**
+     * 解析综合报告命令（如 /sub 或 /sub 7）
+     */
+    private function parseSummaryCommand(array $matches): array
+    {
+        return [null, isset($matches[6]) ? intval($matches[6]) : 0, null];
+    }
+
+    /**
+     * 验证并限制数量范围
+     */
+    private function validateLimit(int $limit): int
+    {
+        return max(1, min($limit, 100));
     }
 
     /**
@@ -242,7 +280,7 @@ class Plugin extends AbstractPlugin
                 'markdown'
             );
         } else {
-            $periodLabel = $this->getPeriodLabel($days);
+            $periodLabel = $this->formatPeriodLabel($days);
             $this->telegramService->sendMessage(
                 $message->chat_id,
                 "📊 {$periodLabel}暂无订阅访问数据",
@@ -283,16 +321,13 @@ class Plugin extends AbstractPlugin
             return ['has_data' => false, 'report' => []];
         }
 
-        $timeRange = $this->getTimeRange($days);
-        $periodLabel = $this->formatTimeRangeLabel($timeRange);
+        $periodLabel = $this->formatPeriodLabel($days);
 
-        // 获取数据
-        $stats = $this->calculateBasicStats($subscriptionLogs);
-        $uaRanking = $this->getUARanking($subscriptionLogs);
-        $userRanking = $this->getUserRanking($subscriptionLogs);
-        $ipRanking = $this->getIPRanking($subscriptionLogs);
+        $stats = $this->calculateBasicStats($subscriptionLogs, $days);
+        $uaRanking = $this->getUARanking($subscriptionLogs, $days);
+        $userRanking = $this->getUserRanking($subscriptionLogs, $days);
+        $ipRanking = $this->getIPRanking($subscriptionLogs, $days);
 
-        // 构建报告
         $report = $this->buildSummaryReport($periodLabel, $stats, $uaRanking, $userRanking, $ipRanking);
 
         return ['has_data' => true, 'report' => $report];
@@ -314,7 +349,6 @@ class Plugin extends AbstractPlugin
             "💡 使用 `/sub user` 查看更多"
         ];
 
-        // 添加用户排行
         foreach ($userRanking->take(5) as $index => $user) {
             $rank = $index + 1;
             $frequencyIcon = $this->getFrequencyIcon($user['count']);
@@ -326,7 +360,6 @@ class Plugin extends AbstractPlugin
         $report[] = "══════════════════════════";
         $report[] = "💡 使用 `/sub ip` 查看更多";
 
-        // 添加IP排行
         foreach ($ipRanking->take(5) as $index => $ip) {
             $rank = $index + 1;
             $frequencyIcon = $this->getFrequencyIcon($ip['count']);
@@ -339,7 +372,6 @@ class Plugin extends AbstractPlugin
         $report[] = "══════════════════════════";
         $report[] = "💡 使用 `/sub ua` 查看更多";
 
-        // 添加客户端排行
         foreach ($uaRanking->take(5) as $index => $ua) {
             $rank = $index + 1;
             $report[] = "{$rank}. `{$ua['ua']}`：{$ua['count']} 次 ({$ua['users']} 用户)";
@@ -358,9 +390,8 @@ class Plugin extends AbstractPlugin
             return ['has_data' => false, 'report' => []];
         }
 
-        $timeRange = $this->getTimeRange($days);
-        $periodLabel = $this->formatTimeRangeLabel($timeRange);
-        $userRanking = $this->getUserRanking($subscriptionLogs);
+        $periodLabel = $this->formatPeriodLabel($days);
+        $userRanking = $this->getUserRanking($subscriptionLogs, $days);
 
         $report = [
             "👥 用户排行 TOP {$limit} 💡 使用 `/sub user {$limit}` 查看更多",
@@ -387,9 +418,8 @@ class Plugin extends AbstractPlugin
             return ['has_data' => false, 'report' => []];
         }
 
-        $timeRange = $this->getTimeRange($days);
-        $periodLabel = $this->formatTimeRangeLabel($timeRange);
-        $uaRanking = $this->getUARanking($subscriptionLogs);
+        $periodLabel = $this->formatPeriodLabel($days);
+        $uaRanking = $this->getUARanking($subscriptionLogs, $days);
 
         $report = [
             "📱 UA排行 TOP {$limit} 💡 使用 `/sub ua {$limit}` 查看更多",
@@ -415,9 +445,8 @@ class Plugin extends AbstractPlugin
             return ['has_data' => false, 'report' => []];
         }
 
-        $timeRange = $this->getTimeRange($days);
-        $periodLabel = $this->formatTimeRangeLabel($timeRange);
-        $ipRanking = $this->getIPRanking($subscriptionLogs);
+        $periodLabel = $this->formatPeriodLabel($days);
+        $ipRanking = $this->getIPRanking($subscriptionLogs, $days);
 
         $report = [
             "🌐 IP访问排行 TOP {$limit} 💡 使用 `/sub ip {$limit}` 查看更多",
@@ -447,25 +476,43 @@ class Plugin extends AbstractPlugin
         return Log::where('title', '订阅访问')
             ->where('created_at', '>=', $timeRange['startAt'])
             ->where('created_at', '<', $timeRange['endAt'])
+            ->select(['id', 'ip', 'context', 'created_at'])
+            ->orderBy('created_at', 'desc')
             ->get();
     }
 
     /**
      * 计算基础统计
      */
-    private function calculateBasicStats(\Illuminate\Database\Eloquent\Collection $logs): array
+    private function calculateBasicStats(\Illuminate\Database\Eloquent\Collection $logs, int $days = 0): array
     {
+        if ($logs->isEmpty()) {
+            return [
+                'totalAccess' => 0,
+                'uniqueUsers' => 0,
+                'avgIPPerUser' => 0,
+                'avgUAPerUser' => 0,
+            ];
+        }
+
         $totalAccess = $logs->count();
+
         $uniqueUsers = $logs->pluck('context')
             ->map(fn($context) => json_decode($context, true)['user_email'] ?? null)
             ->filter()
             ->unique()
             ->count();
-        $uniqueIPs = $logs->pluck('ip')->unique()->count();
-        $uniqueUAs = $logs->map(function ($log) {
-            $context = json_decode($log->context, true);
-            return $this->parseUserAgent($context['user_agent'] ?? '');
-        })->unique()->count();
+
+        $uniqueIPs = $logs->pluck('ip')->filter()->unique()->count();
+
+        $uniqueUAs = $logs->pluck('context')
+            ->map(function ($context) {
+                $data = json_decode($context, true);
+                return $this->parseUserAgent($data['user_agent'] ?? '');
+            })
+            ->filter()
+            ->unique()
+            ->count();
 
         return [
             'totalAccess' => $totalAccess,
@@ -478,91 +525,99 @@ class Plugin extends AbstractPlugin
     /**
      * 获取客户端排行
      */
-    private function getUARanking(\Illuminate\Database\Eloquent\Collection $logs): \Illuminate\Support\Collection
+    private function getUARanking(\Illuminate\Database\Eloquent\Collection $logs, int $days = 0): \Illuminate\Support\Collection
     {
-        return collect($logs)
-            ->map(function ($log) {
-                $context = json_decode($log->context, true);
-                return [
-                    'ua' => $this->parseUserAgent($context['user_agent'] ?? ''),
-                    'user_email' => $context['user_email'] ?? null
-                ];
-            })
-            ->groupBy('ua')
-            ->map(function ($group) {
-                return [
-                    'ua' => $group->first()['ua'],
-                    'count' => $group->count(),
-                    'users' => $group->pluck('user_email')->filter()->unique()->count()
-                ];
-            })
-            ->sortByDesc('count')
-            ->values();
+        if ($logs->isEmpty()) {
+            return collect([]);
+        }
+
+        return $logs->map(function ($log) {
+            $context = json_decode($log->context, true);
+            return [
+                'ua' => $this->parseUserAgent($context['user_agent'] ?? ''),
+                'user_email' => $context['user_email'] ?? null
+            ];
+        })
+        ->groupBy('ua')
+        ->map(function ($group) {
+            return [
+                'ua' => $group->first()['ua'],
+                'count' => $group->count(),
+                'users' => $group->pluck('user_email')->filter()->unique()->count()
+            ];
+        })
+        ->sortByDesc('count')
+        ->values();
     }
 
     /**
      * 获取用户排行
      */
-    private function getUserRanking(\Illuminate\Database\Eloquent\Collection $logs): \Illuminate\Support\Collection
+    private function getUserRanking(\Illuminate\Database\Eloquent\Collection $logs, int $days = 0): \Illuminate\Support\Collection
     {
-        return collect($logs)
-            ->map(function ($log) {
-                $context = json_decode($log->context, true);
-                return [
-                    'email' => $context['user_email'] ?? '未知用户',
-                    'count' => 1
-                ];
-            })
-            ->groupBy('email')
-            ->map(function ($group) {
-                return [
-                    'email' => $group->first()['email'],
-                    'count' => $group->count()
-                ];
-            })
-            ->sortByDesc('count')
-            ->values();
+        if ($logs->isEmpty()) {
+            return collect([]);
+        }
+
+        return $logs->map(function ($log) {
+            $context = json_decode($log->context, true);
+            return [
+                'email' => $context['user_email'] ?? '未知用户',
+                'count' => 1
+            ];
+        })
+        ->groupBy('email')
+        ->map(function ($group) {
+            return [
+                'email' => $group->first()['email'],
+                'count' => $group->count()
+            ];
+        })
+        ->sortByDesc('count')
+        ->values();
     }
 
     /**
      * 获取IP排行
      */
-    private function getIPRanking(\Illuminate\Database\Eloquent\Collection $logs): \Illuminate\Support\Collection
+    private function getIPRanking(\Illuminate\Database\Eloquent\Collection $logs, int $days = 0): \Illuminate\Support\Collection
     {
-        return collect($logs)
-            ->map(function ($log) {
-                $context = json_decode($log->context, true);
-                return [
-                    'ip' => $log->ip,
-                    'user_email' => $context['user_email'] ?? null,
-                    'ua' => $this->parseUserAgent($context['user_agent'] ?? '')
-                ];
-            })
-            ->groupBy('ip')
-            ->map(function ($group) {
-                return [
-                    'ip' => $group->first()['ip'],
-                    'count' => $group->count(),
-                    'unique_users' => $group->pluck('user_email')->filter()->unique()->count(),
-                    'unique_uas' => $group->pluck('ua')->unique()->count()
-                ];
-            })
-            ->sortByDesc('count')
-            ->values();
+        if ($logs->isEmpty()) {
+            return collect([]);
+        }
+
+        return $logs->map(function ($log) {
+            $context = json_decode($log->context, true);
+            return [
+                'ip' => $log->ip,
+                'user_email' => $context['user_email'] ?? null,
+                'ua' => $this->parseUserAgent($context['user_agent'] ?? '')
+            ];
+        })
+        ->groupBy('ip')
+        ->map(function ($group) {
+            return [
+                'ip' => $group->first()['ip'],
+                'count' => $group->count(),
+                'unique_users' => $group->pluck('user_email')->filter()->unique()->count(),
+                'unique_uas' => $group->pluck('ua')->unique()->count()
+            ];
+        })
+        ->sortByDesc('count')
+        ->values();
     }
 
     // ==================== 工具方法 ====================
 
     /**
-     * 获取时间段标签
+     * 格式化时间段标签
      */
-    private function getPeriodLabel(int $days): string
+    private function formatPeriodLabel(int $days): string
     {
-        return match ($days) {
-            0 => '今日',
-            1 => '昨日',
-            default => "最近{$days}天"
-        };
+        $timeRange = $this->getTimeRange($days);
+        $start = date('Y-m-d H:i', $timeRange['startAt']);
+        $end = date('Y-m-d H:i', $timeRange['endAt']);
+        return "{$start} ~ {$end}";
     }
 
     /**
@@ -596,7 +651,7 @@ class Plugin extends AbstractPlugin
     }
 
     /**
-     * 获取时间范围（参考 Baobiao 插件）
+     * 获取时间范围
      */
     private function getTimeRange(int $days = 0): array
     {
@@ -617,51 +672,39 @@ class Plugin extends AbstractPlugin
     }
 
     /**
-     * 格式化时间范围标签
-     */
-    private function formatTimeRangeLabel(array $timeRange): string
-    {
-        $start = date('Y-m-d H:i', $timeRange['startAt']);
-        $end = date('Y-m-d H:i', $timeRange['endAt']);
-        return "{$start} ~ {$end}";
-    }
-
-    /**
      * 获取真实 IP 地址（支持各种 CDN）
      */
     private function getRealIpAddress(Request $request): string
     {
-        // 检查各种 CDN 头信息，按优先级顺序
         $headers = [
-            'CF-Connecting-IP',        // Cloudflare
-            'True-Client-IP',          // Cloudflare Enterprise
-            'X-Real-IP',               // Nginx
-            'X-Forwarded-For',         // 标准代理头
-            'HTTP_X_FORWARDED_FOR',    // 某些服务器的变体
-            'HTTP_X_REAL_IP',          // 某些服务器的变体
-            'X-Cluster-Client-IP',     // 集群环境
-            'X-Original-Forwarded-For', // 某些负载均衡器
-            'HTTP_CLIENT_IP',          // 某些环境
-            'WL-Proxy-Client-IP',      // WebLogic
+            'CF-Connecting-IP',
+            'True-Client-IP',
+            'X-Real-IP',
+            'X-Forwarded-For',
+            'HTTP_X_FORWARDED_FOR',
+            'HTTP_X_REAL_IP',
+            'X-Cluster-Client-IP',
+            'X-Original-Forwarded-For',
+            'HTTP_CLIENT_IP',
+            'WL-Proxy-Client-IP',
         ];
 
         foreach ($headers as $header) {
             $ip = $request->header($header);
+            if (!$ip) {
+                continue;
+            }
+
+            if (strtolower($header) === 'x-forwarded-for') {
+                $ips = explode(',', $ip);
+                $ip = trim($ips[0]);
+            }
+
             if ($this->isValidIp($ip)) {
-                // X-Forwarded-For 可能包含多个 IP，取第一个
-                if (strtolower($header) === 'x-forwarded-for') {
-                    $ips = explode(',', $ip);
-                    $ip = trim($ips[0]);
-                    if ($this->isValidIp($ip)) {
-                        return $ip;
-                    }
-                } else {
-                    return $ip;
-                }
+                return $ip;
             }
         }
 
-        // 如果没有找到代理头，使用默认方法
         return $request->ip();
     }
 
@@ -670,24 +713,22 @@ class Plugin extends AbstractPlugin
      */
     private function isValidIp($ip): bool
     {
-        if (!$ip || empty(trim($ip))) {
+        if (empty($ip)) {
             return false;
         }
 
         $ip = trim($ip);
 
-        // 过滤掉内网 IP 和无效 IP
         if (!filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
             return false;
         }
 
-        // 过滤掉一些常见的无效值
         $invalidPatterns = [
-            '/^127\./',           // localhost
-            '/^169\.254\./',      // 链路本地地址
-            '/^::1$/',            // IPv6 localhost
-            '/^fc00:/',           // IPv6 私有地址
-            '/^fe80:/',           // IPv6 链路本地地址
+            '/^127\./',
+            '/^169\.254\./',
+            '/^::1$/',
+            '/^fc00:/',
+            '/^fe80:/',
         ];
 
         foreach ($invalidPatterns as $pattern) {

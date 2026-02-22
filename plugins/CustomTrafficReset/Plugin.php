@@ -16,7 +16,6 @@ use Throwable;
 class Plugin extends AbstractPlugin
 {
     private const SYNC_CHUNK_SIZE = 200;
-    private const SECONDS_PER_DAY = 86400;
 
     private const SCENARIO_NEW_PURCHASE = 'new_purchase';
     private const SCENARIO_EXPIRED_REPURCHASE = 'expired_repurchase';
@@ -66,7 +65,7 @@ class Plugin extends AbstractPlugin
         }
 
         $user = $this->resolveUser($order);
-        if (!$user) {
+        if (!$user instanceof User) {
             return;
         }
 
@@ -77,7 +76,6 @@ class Plugin extends AbstractPlugin
             'has_plan' => (bool) $user->plan_id,
             'expired' => $user->expired_at !== null && $user->expired_at <= time(),
         ];
-
     }
 
     public function handleOrderOpenAfter(Order $order): void
@@ -88,7 +86,7 @@ class Plugin extends AbstractPlugin
 
         $user = $this->resolveUser($order);
         $plan = $this->resolvePlan($order);
-        if (!$user || !$plan) {
+        if (!$user instanceof User || !$plan instanceof Plan) {
             return;
         }
 
@@ -96,7 +94,6 @@ class Plugin extends AbstractPlugin
         $scenario = $this->determineScenario($order, $user, $snapshot);
         $months = $this->resolvePeriodMonths($order);
         $intervalDays = $this->parseIntervalDays($plan);
-        $originalExpiredAt = $user->expired_at;
         $originalNextResetAt = $user->next_reset_at;
         $nextResetChanged = false;
 
@@ -186,7 +183,6 @@ class Plugin extends AbstractPlugin
 
                     $now = Carbon::now($timezone);
 
-                    // 跳过已过期用户，避免写入无意义的重置时间
                     if ($user->expired_at !== null && $user->expired_at <= $now->timestamp) {
                         continue;
                     }
@@ -221,8 +217,7 @@ class Plugin extends AbstractPlugin
             return $order->user;
         }
 
-        $userId = $order->user_id ?? null;
-        return $userId ? User::find($userId) : null;
+        return $order->user_id ? User::find($order->user_id) : null;
     }
 
     private function resolvePlan(Order $order): ?Plan
@@ -231,8 +226,7 @@ class Plugin extends AbstractPlugin
             return $order->plan;
         }
 
-        $planId = $order->plan_id ?? null;
-        return $planId ? Plan::find($planId) : null;
+        return $order->plan_id ? Plan::find($order->plan_id) : null;
     }
 
     private function determineScenario(Order $order, User $user, ?array $snapshot): string
@@ -333,17 +327,11 @@ class Plugin extends AbstractPlugin
         $timezone = config('app.timezone');
         $now = Carbon::now($timezone);
 
-        $candidate = null;
-
-        if ($scenario === self::SCENARIO_RENEWAL) {
-            if ($snapshot && !empty($snapshot['next_reset_at'])) {
-                $previous = Carbon::createFromTimestamp($snapshot['next_reset_at'], $timezone);
-                if ($previous->isFuture()) {
-                    $candidate = $previous;
-                }
-            }
-
-            if ($candidate === null) {
+        if ($scenario === self::SCENARIO_RENEWAL && $snapshot && !empty($snapshot['next_reset_at'])) {
+            $previous = Carbon::createFromTimestamp($snapshot['next_reset_at'], $timezone);
+            if ($previous->isFuture()) {
+                $candidate = $previous;
+            } else {
                 $candidate = $now->copy()->addDays($intervalDays);
             }
         } else {
@@ -380,7 +368,7 @@ class Plugin extends AbstractPlugin
         }
 
         $timezone = $now->getTimezone();
-        $intervalSeconds = $intervalDays * self::SECONDS_PER_DAY;
+        $intervalSeconds = $intervalDays * 86400;
 
         $base = null;
         if ($user->last_reset_at) {

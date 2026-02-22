@@ -1,7 +1,7 @@
 {
     "code": "hy2_upgrade_tips",
     "name": "Hysteria2 升级提示插件",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "为不支持 Hysteria2 的客户端显示升级提示，引导用户使用支持 Hysteria2 的客户端",
     "author": "周宇航",
     "require": {
