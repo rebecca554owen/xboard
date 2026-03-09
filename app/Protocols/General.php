@@ -17,7 +17,9 @@ class General extends AbstractProtocol
         Server::TYPE_SHADOWSOCKS,
         Server::TYPE_TROJAN,
         Server::TYPE_HYSTERIA,
+        Server::TYPE_ANYTLS,
         Server::TYPE_SOCKS,
+        Server::TYPE_TUIC,
     ];
 
     protected $protocolRequirements = [
@@ -38,7 +40,9 @@ class General extends AbstractProtocol
                 Server::TYPE_SHADOWSOCKS => self::buildShadowsocks($item['password'], $item),
                 Server::TYPE_TROJAN => self::buildTrojan($item['password'], $item),
                 Server::TYPE_HYSTERIA => self::buildHysteria($item['password'], $item),
+                Server::TYPE_ANYTLS => self::buildAnyTLS($item['password'], $item),
                 Server::TYPE_SOCKS => self::buildSocks($item['password'], $item),
+                Server::TYPE_TUIC => self::buildTuic($item['password'], $item),
                 default => '',
             };
         }
@@ -133,6 +137,7 @@ class General extends AbstractProtocol
         switch ($server['protocol_settings']['tls']) {
             case 1:
                 $config['security'] = "tls";
+                $config['fp'] = Helper::getRandFingerprint();
                 if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
                     $config['sni'] = $serverName;
                 }
@@ -254,7 +259,74 @@ class General extends AbstractProtocol
 
         return $uri;
     }
+    
+    
+    public static function buildTuic($password, $server)
+    {
+        $protocol_settings = data_get($server, 'protocol_settings', []);
+        $name = rawurlencode($server['name']);
+        $addr = Helper::wrapIPv6($server['host']);
+        $port = $server['port'];
+        $uuid = $password; // v2rayN格式里，uuid和password都是密码部分
+        $pass = $password;
 
+        $queryParams = [];
+
+        // 填充sni参数
+        if ($sni = data_get($protocol_settings, 'tls.server_name')) {
+            $queryParams['sni'] = $sni;
+        }
+
+        // alpn参数，支持多值时用逗号连接
+        if ($alpn = data_get($protocol_settings, 'alpn')) {
+            if (is_array($alpn)) {
+                $queryParams['alpn'] = implode(',', $alpn);
+            } else {
+                $queryParams['alpn'] = $alpn;
+            }
+        }
+
+        // congestion_controller参数，默认cubic
+        $congestion = data_get($protocol_settings, 'congestion_control', 'cubic');
+        $queryParams['congestion_control'] = $congestion;
+
+        // udp_relay_mode参数，默认native
+        $udpRelay = data_get($protocol_settings, 'udp_relay_mode', 'native');
+        $queryParams['udp-relay-mode'] = $udpRelay;
+
+        $query = http_build_query($queryParams);
+
+        // 构造完整URI，格式：
+        // Tuic://uuid:password@host:port?sni=xxx&alpn=xxx&congestion_controller=xxx&udp_relay_mode=xxx#别名
+        $uri = "tuic://{$uuid}:{$pass}@{$addr}:{$port}";
+
+        if (!empty($query)) {
+            $uri .= "?{$query}";
+        }
+
+        $uri .= "#{$name}\r\n";
+
+        return $uri;
+    }
+
+
+
+ 	   
+
+    public static function buildAnyTLS($password, $server)
+    {
+        $protocol_settings = $server['protocol_settings'];
+        $name = rawurlencode($server['name']);
+        $params = [
+            'sni' => data_get($protocol_settings, 'tls.server_name'),
+            'insecure' => data_get($protocol_settings, 'tls.allow_insecure')
+        ];
+        $query = http_build_query($params);
+        $uri = "anytls://{$password}@{$server['host']}:{$server['port']}?{$query}#{$name}";
+        $uri .= "\r\n";
+        return $uri;
+    }
+    
     public static function buildSocks($password, $server)
     {
         $name = rawurlencode($server['name']);

@@ -165,6 +165,7 @@ class Shadowrocket extends AbstractProtocol
                 if ($serverName = data_get($protocol_settings, 'tls_settings.server_name')) {
                     $config['peer'] = $serverName;
                 }
+                $config['fp'] = Helper::getRandFingerprint();
                 break;
             case 2:
                 $config['tls'] = 1;
@@ -356,8 +357,10 @@ class Shadowrocket extends AbstractProtocol
     }
 
     public static function buildSocks($password, $server)
-    {
-        $uri = "socks://" . base64_encode("{$password}:{$password}@{$server['host']}:{$server['port']}") . "?method=auto";
+    {   
+        $protocol_settings = $server['protocol_settings'];
+        $name = rawurlencode($server['name']);
+        $uri = "socks://" . base64_encode("{$password}:{$password}@{$server['host']}:{$server['port']}") . "?method=auto#{$name}";
         $uri .= "\r\n";
         return $uri;
     }
