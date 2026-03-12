@@ -453,15 +453,16 @@ class UserController extends Controller
         ];
 
         $chunkSize = 1000;
+        $mailService = app(\App\Services\MailService::class);
 
-        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue, &$totalProcessed) {
+        $builder->chunk($chunkSize, function ($users) use ($subject, $templateValue, $mailService) {
             foreach ($users as $user) {
-                dispatch(new SendEmailJob([
+                $mailService->dispatchEmail([
                     'email' => $user->email,
                     'subject' => $subject,
                     'template_name' => 'notify',
                     'template_value' => $templateValue
-                ], 'send_email_mass'));
+                ]);
             }
         });
 

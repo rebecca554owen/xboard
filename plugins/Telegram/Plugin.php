@@ -51,13 +51,23 @@ class Plugin extends AbstractPlugin
       return;
     }
 
+    $user = $order->user;
+    $email = $user ? $user->email : '未知';
+
+    $plan = $order->plan;
+    $planName = $plan ? $plan->name : '未知';
+
     $message = sprintf(
       "💰成功收款%s元\n" .
       "———————————————\n" .
+      "用户邮箱：%s\n" .
+      "套餐名称：%s\n" .
       "支付接口：%s\n" .
       "支付渠道：%s\n" .
       "本站订单：`%s`",
       $order->total_amount / 100,
+      $email,
+      $planName,
       $payment->payment,
       $payment->name,
       $order->trade_no
