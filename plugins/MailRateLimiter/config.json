@@ -1,0 +1,58 @@
+{
+    "name": "邮件发送频率限制",
+    "code": "mail_rate_limiter",
+    "version": "1.0.4",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "description": "基于Redis 的邮件发送频率限制插件，防止邮件滥用",
+    "config": {
+        "enable_rate_limit": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用频率限制",
+            "description": "是否启用邮件发送频率限制功能"
+        },
+        "second_limit": {
+            "type": "number",
+            "default": 1,
+            "min": 0,
+            "label": "每秒限制",
+            "description": "每秒最多发送邮件数量（0为不限制）"
+        },
+        "minute_limit": {
+            "type": "number",
+            "default": 30,
+            "min": 0,
+            "label": "每分钟限制",
+            "description": "每分钟最多发送邮件数量（0为不限制）"
+        },
+        "hour_limit": {
+            "type": "number",
+            "default": 1500,
+            "min": 0,
+            "label": "每小时限制",
+            "description": "每小时最多发送邮件数量（0为不限制）"
+        },
+        "daily_limit": {
+            "type": "number",
+            "default": 30000,
+            "min": 0,
+            "label": "每日限制",
+            "description": "每天最多发送邮件数量（0为不限制）"
+        },
+        "limit_verify_codes": {
+            "type": "boolean",
+            "default": false,
+            "label": "限制验证码邮件",
+            "description": "是否对验证码邮件也进行频率限制"
+        },
+        "debug_logs": {
+            "type": "boolean",
+            "default": false,
+            "label": "启用调试日志",
+            "description": "是否记录频率限制的详细调试信息（包括成功、限制、延迟等所有日志）"
+        }
+    }
+}

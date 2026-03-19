@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Jobs\SendEmailJob;
 use App\Models\MailLog;
 use App\Models\User;
+use App\Services\Plugin\HookManager;
 use App\Utils\CacheKey;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
@@ -43,6 +44,25 @@ class MailService
     /**
      * 获取需要发送提醒的用户总数
      */
+
+    /**
+     * 统一的邮件调度入口，支持频率限制
+     *
+     * @param array $params 邮件参数
+     * @return bool 是否成功调度（被频率限制时返回false）
+     */
+    public function dispatchEmail(array $params): bool
+    {
+        $result = HookManager::filter('mail.send.before', $params);
+
+        if ($result === false || $result === null) {
+            return false;
+        }
+
+        SendEmailJob::dispatch($result);
+        return true;
+    }
+
     public function getTotalUsersNeedRemind(): int
     {
         return User::where(function ($query) {
@@ -174,7 +194,7 @@ class MailService
         if (!Cache::put($flag, 1, 24 * 3600))
             return;
 
-        SendEmailJob::dispatch([
+        $this->dispatchEmail([
             'email' => $user->email,
             'subject' => __('The traffic usage in :app_name has reached 80%', [
                 'app_name' => admin_setting('app_name', 'XBoard')
@@ -193,7 +213,7 @@ class MailService
             return;
         }
 
-        SendEmailJob::dispatch([
+        $this->dispatchEmail([
             'email' => $user->email,
             'subject' => __('The service in :app_name is about to expire', [
                 'app_name' => admin_setting('app_name', 'XBoard')
