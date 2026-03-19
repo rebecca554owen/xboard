@@ -6,7 +6,6 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\Admin\UserGenerate;
 use App\Http\Requests\Admin\UserSendMail;
 use App\Http\Requests\Admin\UserUpdate;
-use App\Jobs\SendEmailJob;
 use App\Models\Plan;
 use App\Models\User;
 use App\Services\AuthService;
@@ -486,8 +485,9 @@ class UserController extends Controller
         $appUrl = admin_setting('app_url');
 
         $chunkSize = 1000;
+        $mailService = app(\App\Services\MailService::class);
 
-        $builder->chunk($chunkSize, function ($users) use ($subject, $content, $appName, $appUrl) {
+        $builder->chunk($chunkSize, function ($users) use ($subject, $content, $appName, $appUrl, $mailService) {
             foreach ($users as $user) {
                 $vars = [
                     'app.name' => $appName,
@@ -511,12 +511,12 @@ class UserController extends Controller
                     'content_mode' => 'text',
                 ];
 
-                dispatch(new SendEmailJob([
+                $mailService->dispatchEmail([
                     'email' => $user->email,
                     'subject' => $subject,
                     'template_name' => 'notify',
                     'template_value' => $templateValue
-                ], 'send_email_mass'));
+                ]);
             }
         });
 
