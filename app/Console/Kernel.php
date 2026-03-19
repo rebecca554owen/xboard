@@ -29,6 +29,9 @@ class Kernel extends ConsoleKernel
         Cache::put(CacheKey::get('SCHEDULE_LAST_CHECK_AT', null), time());
         // v2board
         $schedule->command('xboard:statistics')->dailyAt('0:10')->onOneServer();
+        // autoban
+        $schedule->command('autoban:traffic --limit=300')->everyMinute()->onOneServer(); // 每分钟检查一次流量超限用户
+        $schedule->command('autoban:traffic --unban')->dailyAt('00:00')->onOneServer(); // 每天0点解禁所有用户
         // check
         $schedule->command('check:order')->everyMinute()->onOneServer();
         $schedule->command('check:commission')->everyMinute()->onOneServer();
