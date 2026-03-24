@@ -57,8 +57,13 @@ class Plugin extends AbstractPlugin
         $deleteExpiredAfterDays = max(0, (int) $this->getConfig('delete_expired_users_after_days', 0));
 
         try {
-            $invalidUserCount = $this->countInvalidUsers($days);
-            $expiredUserCount = $this->countExpiredUsers($days, $deleteExpiredAfterDays);
+            $invalidUserCount = 0;
+            $expiredUserCount = 0;
+
+            if (!$enableAutoDelete) {
+                $invalidUserCount = $this->countInvalidUsers($days);
+                $expiredUserCount = $this->countExpiredUsers($days, $deleteExpiredAfterDays);
+            }
 
             if ($enableAutoDelete) {
                 $totalDeleted = 0;
@@ -156,7 +161,8 @@ class Plugin extends AbstractPlugin
         // 所需索引：CREATE INDEX idx_cleanup_basic ON users(is_admin, balance, commission_balance, created_at);
         // 重要：使用 select 确保只返回主表字段，避免 LEFT JOIN 导致的 NULL 值污染
         return $query->where('v2_user.created_at', '<', time() - ($days * 86400))
-                     ->select('v2_user.*')  // 只选择主表字段，避免 JOIN 污染
+                     ->orderBy('v2_user.id')
+                     ->select(['v2_user.id', 'v2_user.email', 'v2_user.created_at'])
                      ->limit($batchSize)
                      ->get();
     }

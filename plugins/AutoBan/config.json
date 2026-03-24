@@ -1,9 +1,9 @@
 {
   "name": "每日流量超出阈值自动封禁，定时解禁",
   "code": "auto_ban",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "type": "feature",
-  "description": "根据每日流量使用情况自动封禁或解禁用户。",
+  "description": "根据每日流量使用情况自动封禁或解禁用户，优先使用 stat_user 数据。",
   "author": "周宇航",
   "require": {
     "xboard": ">=1.0.0"
@@ -13,7 +13,7 @@
       "type": "boolean",
       "default": true,
       "label": "启用自动封禁",
-      "description": "根据今日流量统计封禁超出阈值的用户"
+      "description": "根据今日流量统计封禁超出阈值的用户，优先读取 stat_user，必要时回退 Redis。"
     },
     "daily_limit_gb": {
       "type": "number",
@@ -31,7 +31,7 @@
       "type": "boolean",
       "default": true,
       "label": "启用每日解禁",
-      "description": "每天自动解禁所有被封禁用户"
+      "description": "每天自动解禁自动流量封禁的用户，并同步节点侧状态。"
     },
     "unban_time": {
       "type": "string",

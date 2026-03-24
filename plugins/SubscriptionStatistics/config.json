@@ -1,8 +1,8 @@
 {
     "name": "订阅访问统计",
     "code": "subscription_statistics",
-    "version": "1.0.2",
-    "description": "统计用户订阅访问行为，通过Telegram查看排行数据",
+    "version": "1.1.0",
+    "description": "基于Redis统计用户订阅访问行为，通过Telegram查看排行数据",
     "author": "周宇航",
     "require": {
         "xboard": ">=1.0.0"
@@ -25,6 +25,18 @@
             "default": true,
             "label": "记录IP地址",
             "description": "是否记录IP地址"
+        },
+        "retention_days": {
+            "type": "number",
+            "default": 35,
+            "label": "保留天数",
+            "description": "Redis中统计数据的保留天数，最少31天。"
+        },
+        "redis_prefix": {
+            "type": "string",
+            "default": "subscription_statistics",
+            "label": "Redis前缀",
+            "description": "统计数据在Redis中的键名前缀。"
         }
     }
 }

@@ -9,7 +9,7 @@
 | 配置项 | 说明 | 默认值 | 类型 |
 | --- | --- | --- | --- |
 | `enable_auto_delete` | 启用自动删除功能，关闭时为试运行模式 | `false` | boolean |
-| `schedule_frequency` | 定时任务频率（minutely/hourly/daily） | `minutely` | select |
+| `schedule_frequency` | 定时任务频率（minutely/hourly/daily） | `hourly` | select |
 | `delete_days` | 注册超过该天数仍未激活的用户才会被清理 | `7` | number |
 | `delete_expired_users_after_days` | 删除过期超过指定天数的用户 | `0` | number |
 | `batch_size` | 每批次最多处理的用户数量 | `1024` | number |
@@ -63,7 +63,9 @@
 ## 技术特性
 
 - **并发安全**：使用缓存锁防止任务重复执行
+- **试运行优化**：仅在试运行模式统计待删数量，真实删除时直接按批次拉取候选用户
 - **事务保护**：每个用户删除操作都是原子性的
 - **批量处理**：支持分批处理大量用户
+- **稳定顺序**：按用户 ID 顺序抓取候选，降低重复扫描和跳漏风险
 - **错误恢复**：单个用户删除失败不影响其他用户
 - **详细日志**：提供完整的执行过程记录

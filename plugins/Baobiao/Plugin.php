@@ -12,11 +12,13 @@ use App\Services\StatisticalService;
 use App\Services\TelegramService;
 use App\Utils\Helper;
 use Illuminate\Console\Scheduling\Schedule;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Support\Facades\Log;
 
 class Plugin extends AbstractPlugin
 {
     private const RANK_LIST_LIMIT = 10;
+    private const MAX_COMMAND_DAYS = 30;
 
     private TelegramService $telegramService;
 
@@ -96,7 +98,9 @@ class Plugin extends AbstractPlugin
 
     private function getCommandDays($message): int
     {
-        return max(0, isset($message->args[0]) ? intval($message->args[0]) : 0);
+        $days = isset($message->args[0]) ? intval($message->args[0]) : 0;
+
+        return min(self::MAX_COMMAND_DAYS, max(0, $days));
     }
 
     private function formatDaysLabel(int $days, string $today, string $yesterday, string $daysFormat): string
@@ -296,8 +300,8 @@ class Plugin extends AbstractPlugin
 
         $periodLabel = $this->formatTimeRangeLabel($timeRange);
         $orderStats = $this->calculateOrderStats($startAt, $endAt);
-        $userStats = $this->calculateUserStats($startAt, $endAt, $orderStats['paid_orders']);
-        $paymentStats = $this->calculatePaymentStats($startAt, $endAt, $orderStats['paid_orders']);
+        $userStats = $this->calculateUserStats($startAt, $endAt);
+        $paymentStats = $this->calculatePaymentStats($startAt, $endAt);
 
         $report = $this->buildReportText($periodLabel, $userStats, $orderStats, $paymentStats, $startAt, $endAt);
 
@@ -310,35 +314,30 @@ class Plugin extends AbstractPlugin
 
     private function calculateOrderStats(int $startAt, int $endAt): array
     {
-        // Performance: Single query with only necessary fields
-        $paidOrders = Order::where('created_at', '>=', $startAt)
-            ->where('created_at', '<', $endAt)
-            ->whereNotIn('status', [0, 2])
-            ->get(['id', 'user_id', 'type', 'total_amount', 'payment_id']);
+        $paidOrderQuery = $this->buildPaidOrderQuery($startAt, $endAt);
+        $paidTotal = (int) (clone $paidOrderQuery)->sum('total_amount');
+        $typeStats = (clone $paidOrderQuery)
+            ->selectRaw('type, COUNT(*) as order_count, COALESCE(SUM(total_amount), 0) as order_amount')
+            ->groupBy('type')
+            ->get()
+            ->keyBy('type');
 
-        // Performance: Calculate totals once using collection aggregation
-        $paidTotal = $paidOrders->sum('total_amount');
-
-        // Performance: Group orders by type to avoid multiple collection iterations
-        $ordersByType = $paidOrders->groupBy('type');
-
-        $newOrders = $ordersByType->get(Order::TYPE_NEW_PURCHASE, collect());
-        $renewOrders = $ordersByType->get(Order::TYPE_RENEWAL, collect());
-        $upgradeOrders = $ordersByType->get(Order::TYPE_UPGRADE, collect());
+        $newStats = $typeStats->get((string) Order::TYPE_NEW_PURCHASE);
+        $renewStats = $typeStats->get((string) Order::TYPE_RENEWAL);
+        $upgradeStats = $typeStats->get((string) Order::TYPE_UPGRADE);
 
         return [
-            'paid_orders' => $paidOrders,
             'paid_total' => $paidTotal,
-            'new_order_count' => $newOrders->count(),
-            'renew_order_count' => $renewOrders->count(),
-            'upgrade_order_count' => $upgradeOrders->count(),
-            'new_order_amount' => $newOrders->sum('total_amount') / 100,
-            'renew_order_amount' => $renewOrders->sum('total_amount') / 100,
-            'upgrade_order_amount' => $upgradeOrders->sum('total_amount') / 100,
+            'new_order_count' => (int) ($newStats->order_count ?? 0),
+            'renew_order_count' => (int) ($renewStats->order_count ?? 0),
+            'upgrade_order_count' => (int) ($upgradeStats->order_count ?? 0),
+            'new_order_amount' => ((int) ($newStats->order_amount ?? 0)) / 100,
+            'renew_order_amount' => ((int) ($renewStats->order_amount ?? 0)) / 100,
+            'upgrade_order_amount' => ((int) ($upgradeStats->order_amount ?? 0)) / 100,
         ];
     }
 
-    private function calculateUserStats(int $startAt, int $endAt, $paidOrders): array
+    private function calculateUserStats(int $startAt, int $endAt): array
     {
         $newUsers = User::where('created_at', '>=', $startAt)
             ->where('created_at', '<', $endAt)
@@ -348,12 +347,24 @@ class Plugin extends AbstractPlugin
             ->where('expired_at', '<', $endAt)
             ->count();
 
-        $renewOrderUsers = $paidOrders->where('type', Order::TYPE_RENEWAL)->pluck('user_id');
-        $upgradeOrderUsers = $paidOrders->where('type', Order::TYPE_UPGRADE)->pluck('user_id');
+        $paidOrderQuery = $this->buildPaidOrderQuery($startAt, $endAt);
+        $renewUserCount = (clone $paidOrderQuery)
+            ->where('type', Order::TYPE_RENEWAL)
+            ->select('user_id')
+            ->distinct()
+            ->count('user_id');
 
-        $renewUserCount = $renewOrderUsers->unique()->count();
-        $upgradeUserCount = $upgradeOrderUsers->unique()->count();
-        $renewedUsers = $renewOrderUsers->merge($upgradeOrderUsers)->unique()->count();
+        $upgradeUserCount = (clone $paidOrderQuery)
+            ->where('type', Order::TYPE_UPGRADE)
+            ->select('user_id')
+            ->distinct()
+            ->count('user_id');
+
+        $renewedUsers = (clone $paidOrderQuery)
+            ->whereIn('type', [Order::TYPE_RENEWAL, Order::TYPE_UPGRADE])
+            ->select('user_id')
+            ->distinct()
+            ->count('user_id');
 
         $renewRate = $this->calculateRenewRate($expiredUsersWithoutRenew, $renewedUsers);
         $expiredUsers = $expiredUsersWithoutRenew + $renewedUsers;
@@ -374,36 +385,49 @@ class Plugin extends AbstractPlugin
         return $expiredUsers ? round(($renewedUsers / $expiredUsers) * 100, 2) : 0;
     }
 
-    private function calculatePaymentStats(int $startAt, int $endAt, $paidOrders)
+    private function calculatePaymentStats(int $startAt, int $endAt)
     {
         $paymentStats = collect();
+        $paidOrderQuery = $this->buildPaidOrderQuery($startAt, $endAt);
+        $paymentOrderStats = (clone $paidOrderQuery)
+            ->selectRaw('payment_id, COUNT(*) as order_count, COALESCE(SUM(total_amount), 0) as order_amount')
+            ->groupBy('payment_id')
+            ->get();
 
-        $allOrders = $paidOrders->groupBy('payment_id');
-
-        $paymentIds = $allOrders->keys()->filter()->unique()->toArray();
+        $paymentIds = $paymentOrderStats->pluck('payment_id')->filter()->unique()->toArray();
         $payments = Payment::whereIn('id', $paymentIds)
             ->where('enable', 1)
             ->orderBy('name')
             ->get()
             ->keyBy('id');
 
+        $statsByPaymentId = [];
+        $nullPaymentStat = null;
+        foreach ($paymentOrderStats as $stat) {
+            if ($stat->payment_id === null) {
+                $nullPaymentStat = $stat;
+                continue;
+            }
+
+            $statsByPaymentId[(string) $stat->payment_id] = $stat;
+        }
+
         foreach ($payments as $paymentId => $payment) {
-            $orders = $allOrders->get($paymentId, collect());
-            if ($orders->isNotEmpty()) {
+            $stat = $statsByPaymentId[(string) $paymentId] ?? null;
+            if ($stat) {
                 $paymentStats->push([
                     'name' => $payment->name,
-                    'count' => $orders->count(),
-                    'amount' => $orders->sum('total_amount') / 100
+                    'count' => (int) $stat->order_count,
+                    'amount' => ((int) $stat->order_amount) / 100
                 ]);
             }
         }
 
-        $nullPaymentOrders = $allOrders->get(null, collect());
-        if ($nullPaymentOrders->isNotEmpty()) {
+        if ($nullPaymentStat) {
             $paymentStats->push([
                 'name' => '未关联支付渠道',
-                'count' => $nullPaymentOrders->count(),
-                'amount' => $nullPaymentOrders->sum('total_amount') / 100
+                'count' => (int) $nullPaymentStat->order_count,
+                'amount' => ((int) $nullPaymentStat->order_amount) / 100
             ]);
         }
 
@@ -444,16 +468,16 @@ class Plugin extends AbstractPlugin
         if ($paymentStats->isNotEmpty()) {
             $report[] = $paymentStats->map(fn($p) => "   ▸ {$p['name']}：{$p['count']} 笔（{$p['amount']} 元）")->join("\n");
         } else {
-            // Performance: Use already fetched orders instead of new query when possible
-            // Note: Manual orders require separate query as they're filtered by callback_no
-            $manualOrders = Order::where('callback_no', 'manual_operation')
+            $manualOrderStat = Order::where('callback_no', 'manual_operation')
                 ->where('created_at', '>=', $startAt)
                 ->where('created_at', '<', $endAt)
                 ->whereNotIn('status', [0, 2])
-                ->get(['id', 'total_amount']);
-            $totalManualAmount = $manualOrders->sum('total_amount') / 100;
+                ->selectRaw('COUNT(*) as order_count, COALESCE(SUM(total_amount), 0) as order_amount')
+                ->first();
+            $manualOrderCount = (int) ($manualOrderStat->order_count ?? 0);
+            $totalManualAmount = ((int) ($manualOrderStat->order_amount ?? 0)) / 100;
             if ($totalManualAmount > 0) {
-                $report[] = "   ▸ 手动操作：{$manualOrders->count()} 笔（{$totalManualAmount} 元）";
+                $report[] = "   ▸ 手动操作：{$manualOrderCount} 笔（{$totalManualAmount} 元）";
             }
         }
 
@@ -461,6 +485,14 @@ class Plugin extends AbstractPlugin
         $report[] = "💰 全部收入总计：".number_format($orderStats['paid_total'] / 100, 2)." 元";
 
         return $report;
+    }
+
+    private function buildPaidOrderQuery(int $startAt, int $endAt): Builder
+    {
+        return Order::query()
+            ->where('created_at', '>=', $startAt)
+            ->where('created_at', '<', $endAt)
+            ->whereNotIn('status', [0, 2]);
     }
 
 }

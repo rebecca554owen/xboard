@@ -2,6 +2,8 @@
 
 namespace Plugin\AutoBan;
 
+use App\Jobs\NodeUserSyncJob;
+use App\Models\StatUser;
 use App\Models\User;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\StatisticalService;
@@ -81,10 +83,10 @@ class Plugin extends AbstractPlugin
             }
 
             $limitBytes = (int) round($limitGb * 1024 * 1024 * 1024);
-            $trafficStats = $this->fetchTodayTraffic();
+            $trafficStats = $this->fetchTodayTraffic($limitBytes);
 
             if ($trafficStats->isEmpty()) {
-                Log::info('AutoBan 插件：今日无流量统计数据。');
+                Log::info('AutoBan 插件：没有用户超过流量限制。');
 
                 return;
             }
@@ -97,7 +99,7 @@ class Plugin extends AbstractPlugin
                 return;
             }
 
-            $overLimitUsers = $this->banOverLimitUsers($validTrafficStats, $limitBytes);
+            $overLimitUsers = $this->banOverLimitUsers($validTrafficStats);
 
             if ($overLimitUsers > 0) {
                 $this->logBanResults($validTrafficStats, $limitBytes, $overLimitUsers, $startTime);
@@ -157,19 +159,15 @@ class Plugin extends AbstractPlugin
      * - whereIn + update 在一次数据库操作中完成所有更新
      * - 避免了 N+1 更新问题
      */
-    private function banOverLimitUsers(Collection $validTrafficStats, int $limitBytes): int
+    private function banOverLimitUsers(Collection $validTrafficStats): int
     {
-        $overLimitUsers = $validTrafficStats
-            ->filter(fn (array $stat) => $stat['total_traffic'] > $limitBytes)
-            ->keyBy('user_id');
-
-        if ($overLimitUsers->isEmpty()) {
+        if ($validTrafficStats->isEmpty()) {
             Log::info('AutoBan 插件：没有用户超过流量限制。');
 
             return 0;
         }
 
-        $userIds = $overLimitUsers->keys()->all();
+        $userIds = $validTrafficStats->pluck('user_id')->unique()->values()->all();
 
         DB::beginTransaction();
 
@@ -177,10 +175,11 @@ class Plugin extends AbstractPlugin
             $updatedCount = User::whereIn('id', $userIds)
                 ->update([
                     'banned' => true,
-                    'remarks' => DB::raw("IF(remarks IS NULL OR remarks = '', '自动流量封禁', CONCAT(remarks, '; 自动流量封禁'))")
+                        'remarks' => DB::raw("IF(remarks IS NULL OR remarks = '', '自动流量封禁', CONCAT(remarks, '; 自动流量封禁'))")
                 ]);
 
             DB::commit();
+            $this->syncUsers($userIds);
 
             return $updatedCount;
         } catch (\Exception $e) {
@@ -197,17 +196,13 @@ class Plugin extends AbstractPlugin
      */
     private function logBanResults(Collection $validTrafficStats, int $limitBytes, int $updatedCount, float $startTime): void
     {
-        $overLimitUsers = $validTrafficStats
-            ->filter(fn (array $stat) => $stat['total_traffic'] > $limitBytes)
-            ->keyBy('user_id');
-
-        foreach ($overLimitUsers as $userId => $stat) {
+        foreach ($validTrafficStats as $stat) {
             $user = $stat['user'];
             $total = Helper::trafficConvert($stat['total_traffic']);
             $limit = Helper::trafficConvert($limitBytes);
 
             Log::warning('AutoBan 插件：用户流量超限封禁', [
-                'user_id' => $userId,
+                'user_id' => $stat['user_id'],
                 'user_email' => $user->email,
                 'traffic_used' => $total,
                 'traffic_limit' => $limit
@@ -233,14 +228,19 @@ class Plugin extends AbstractPlugin
         DB::beginTransaction();
 
         try {
-            $updatedCount = User::where('banned', true)
-                ->where('remarks', 'LIKE', '%自动流量封禁%')
+            $query = User::where('banned', true)
+                ->where('remarks', 'LIKE', '%自动流量封禁%');
+
+            $userIds = $query->pluck('id')->all();
+
+            $updatedCount = User::whereIn('id', $userIds)
                 ->update([
                     'banned' => false,
                     'remarks' => DB::raw("REPLACE(REPLACE(remarks, '; 自动流量封禁', ''), '自动流量封禁', '')")
                 ]);
 
             DB::commit();
+            $this->syncUsers($userIds);
 
             if ($updatedCount > 0) {
                 Log::info(sprintf('AutoBan 插件：已解禁 %d 个自动封禁用户。', $updatedCount));
@@ -258,13 +258,53 @@ class Plugin extends AbstractPlugin
     /**
      * 获取今日用户流量统计
      */
-    private function fetchTodayTraffic(): Collection
+    private function fetchTodayTraffic(int $limitBytes): Collection
     {
         $now = Carbon::now();
+        $startAt = $now->copy()->startOfDay()->timestamp;
+        $endAt = $now->copy()->endOfDay()->timestamp;
 
+        $databaseStats = $this->fetchTodayTrafficFromDatabase($startAt, $endAt, $limitBytes);
+        if ($databaseStats->isNotEmpty()) {
+            Log::info('AutoBan 插件：使用 stat_user 表统计今日流量。', [
+                'record_at' => $startAt,
+                'over_limit_users' => $databaseStats->count(),
+            ]);
+
+            return $databaseStats;
+        }
+
+        $redisStats = $this->fetchTodayTrafficFromRedis($startAt, $endAt, $limitBytes);
+        if ($redisStats->isNotEmpty()) {
+            Log::warning('AutoBan 插件：stat_user 表无今日数据，回退到 Redis 统计。', [
+                'record_at' => $startAt,
+                'over_limit_users' => $redisStats->count(),
+            ]);
+        }
+
+        return $redisStats;
+    }
+
+    private function fetchTodayTrafficFromDatabase(int $startAt, int $endAt, int $limitBytes): Collection
+    {
+        return StatUser::query()
+            ->select('user_id', DB::raw('SUM(u + d) as total_traffic'))
+            ->where('record_at', '>=', $startAt)
+            ->where('record_at', '<=', $endAt)
+            ->groupBy('user_id')
+            ->havingRaw('SUM(u + d) > ?', [$limitBytes])
+            ->get()
+            ->map(fn (StatUser $stat): array => [
+                'user_id' => (int) $stat->user_id,
+                'total_traffic' => (int) $stat->total_traffic,
+            ]);
+    }
+
+    private function fetchTodayTrafficFromRedis(int $startAt, int $endAt, int $limitBytes): Collection
+    {
         $service = new StatisticalService();
-        $service->setStartAt($now->copy()->startOfDay()->timestamp);
-        $service->setEndAt($now->copy()->endOfDay()->timestamp);
+        $service->setStartAt($startAt);
+        $service->setEndAt($endAt);
 
         $rawStats = $service->getStatUser() ?? [];
 
@@ -282,6 +322,14 @@ class Plugin extends AbstractPlugin
                     'total_traffic' => $stats->sum('total_traffic'),
                 ];
             })
+            ->filter(fn (array $stat): bool => $stat['total_traffic'] > $limitBytes)
             ->values();
+    }
+
+    private function syncUsers(array $userIds): void
+    {
+        foreach (array_unique($userIds) as $userId) {
+            NodeUserSyncJob::dispatch((int) $userId, 'updated');
+        }
     }
 }

@@ -1,8 +1,8 @@
 {
     "name": "自动删除无效用户",
     "code": "auto_delete_inactive_users",
-    "version": "1.0.4",
-    "description": "定时清理无效用户和过期用户，支持试运行模式和安全保护。",
+    "version": "1.0.5",
+    "description": "定时清理无效用户和过期用户，支持试运行模式、稳定批量扫描和安全保护。",
     "author": "周宇航",
     "require": {
         "xboard": ">=1.0.0"
@@ -12,7 +12,7 @@
             "type": "boolean",
             "default": false,
             "label": "启用自动删除",
-            "description": "开启后将真实执行删除用户操作，关闭时为（试运行模式）仍会运行并统计拟删除用户数量。"
+            "description": "开启后将真实执行删除用户操作，关闭时为试运行模式，仅统计拟删除用户数量。"
         },
         "schedule_frequency": {
             "type": "select",
@@ -41,7 +41,7 @@
             "type": "number",
             "default": 1024,
             "label": "单次处理数量",
-            "description": "每批次最多处理的用户数量，建议根据服务器性能调整。"
+            "description": "每批次最多处理的用户数量，任务会按用户 ID 顺序分批抓取候选。"
         }
     }
 }

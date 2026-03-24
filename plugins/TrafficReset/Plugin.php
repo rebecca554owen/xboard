@@ -59,29 +59,52 @@ class Plugin extends AbstractPlugin
      */
     protected function checkAndResetTraffic(): void
     {
-        // 性能优化：使用 chunkById 游标处理，避免一次性加载大量数据到内存
         $chunkSize = $this->getConfig('batch_size', 100);
+        $customEnabled = (bool) $this->getConfig('auto_reset_on_exceed_custom', true);
+        $monthlyEnabled = (bool) $this->getConfig('auto_reset_on_exceed_monthly', true);
+        $firstDayEnabled = (bool) $this->getConfig('auto_reset_on_exceed_first_day', true);
+
+        if (!$customEnabled && !$monthlyEnabled && !$firstDayEnabled) {
+            return;
+        }
 
         try {
             $successCount = 0;
             $totalProcessed = 0;
+            $now = time();
+            $enabledResetMethods = [];
+            if ($monthlyEnabled) {
+                $enabledResetMethods[] = Plan::RESET_TRAFFIC_MONTHLY;
+            }
+            if ($firstDayEnabled) {
+                $enabledResetMethods[] = Plan::RESET_TRAFFIC_FIRST_DAY_MONTH;
+            }
 
-            // 性能优化要点：
-            // 1. chunkById 使用主键游标，避免内存溢出
-            // 2. orderBy('id') 确保使用主键索引，提高查询性能
-            // 3. with('plan') 预加载套餐信息，避免 N+1 查询
             User::where('transfer_enable', '>', 0)
                 ->where('banned', 0)
-                ->whereRaw('(u + d) >= transfer_enable * 0.99')  // 使用99%阈值，避免刚好用完的情况
+                ->whereNotNull('expired_at')
+                ->where('expired_at', '>', $now)
+                ->whereRaw('(u + d) >= transfer_enable * 0.99')
                 ->whereNotNull('plan_id')
-                ->whereHas('plan', function ($query) {
-                    $query->where(function ($q) {
-                        $q->whereNull('reset_traffic_method')
-                            ->orWhere('reset_traffic_method', '!=', Plan::RESET_TRAFFIC_NEVER);
+                ->whereHas('plan', function ($query) use ($customEnabled, $enabledResetMethods) {
+                    $query->where(function ($planQuery) use ($customEnabled, $enabledResetMethods) {
+                        if ($customEnabled) {
+                            $planQuery->where('tags', 'like', '%interval_days:%');
+                        }
+
+                        if (!empty($enabledResetMethods)) {
+                            if ($customEnabled) {
+                                $planQuery->orWhereIn('reset_traffic_method', $enabledResetMethods)
+                                    ->orWhereNull('reset_traffic_method');
+                            } else {
+                                $planQuery->whereIn('reset_traffic_method', $enabledResetMethods)
+                                    ->orWhereNull('reset_traffic_method');
+                            }
+                        }
                     });
                 })
-                ->with('plan')  // 预加载套餐关系，避免 N+1 查询
-                ->orderBy('id')  // 确保使用主键索引
+                ->with('plan')
+                ->orderBy('id')
                 ->chunkById($chunkSize, function ($users) use (&$successCount, &$totalProcessed) {
                     foreach ($users as $user) {
                         $totalProcessed++;
@@ -91,8 +114,6 @@ class Plugin extends AbstractPlugin
                         }
                     }
 
-                    // 性能优化：每处理完一批，释放内存
-                    // GC 由 Laravel 自动处理，但显式unset有助于及时释放
                     unset($users);
                 });
 

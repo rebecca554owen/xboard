@@ -165,10 +165,24 @@ class Plugin extends AbstractPlugin
     private function syncCustomResetTimes(): void
     {
         $timezone = config('app.timezone');
+        $now = Carbon::now($timezone);
+        $planIds = Plan::query()
+            ->whereNotNull('tags')
+            ->where('tags', 'like', '%interval_days:%')
+            ->pluck('id')
+            ->all();
+
+        if (empty($planIds)) {
+            return;
+        }
 
         User::query()
-            ->whereNotNull('plan_id')
-            ->with('plan')
+            ->whereIn('plan_id', $planIds)
+            ->where(function ($query) use ($now) {
+                $query->whereNull('expired_at')
+                    ->orWhere('expired_at', '>', $now->timestamp);
+            })
+            ->with(['plan:id,tags'])
             ->chunkById(self::SYNC_CHUNK_SIZE, function ($users) use ($timezone) {
                 foreach ($users as $user) {
                     if (!$user instanceof User) {

@@ -8,7 +8,7 @@
 
 ### 1. 流量耗尽检测
 - 实时监控用户流量使用率（99%阈值）
-- 仅对有套餐且未封禁的用户生效
+- 仅对有套餐、未封禁且仍在有效期内的用户生效
 - 支持自定义周期和系统默认周期的用户
 
 ### 2. 智能重置策略
@@ -44,9 +44,17 @@
 SELECT * FROM users
 WHERE transfer_enable > 0
   AND banned = 0
+  AND expired_at IS NOT NULL
+  AND expired_at > 当前时间
   AND (u + d) >= transfer_enable * 0.99
   AND plan_id IS NOT NULL
 ```
+
+插件还会按当前开关缩小套餐扫描范围：
+
+- 开启 `auto_reset_on_exceed_custom` 时，仅匹配带 `interval_days:` 标签的套餐
+- 开启 `auto_reset_on_exceed_monthly` / `auto_reset_on_exceed_first_day` 时，仅匹配对应重置策略套餐
+- 三种策略都关闭时，任务会直接跳过本轮扫描
 
 ### 重置条件验证
 
@@ -123,7 +131,7 @@ $mapping = [
 - **错误恢复**：单个用户重置失败不影响其他用户
 - **详细日志**：记录完整的重置过程和策略信息
 - **兼容性**：与 CustomTrafficReset 插件完全兼容
-- **性能优化**：使用合理的查询条件和批量处理机制
+- **性能优化**：仅扫描仍有效且可能命中的套餐用户，减少高频任务的无效遍历
 
 ## 使用建议
 

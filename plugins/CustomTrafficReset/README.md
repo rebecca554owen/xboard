@@ -8,7 +8,7 @@
 - **尊重订单场景**：覆盖无套餐新购、到期后续费、在期续费、换套餐四种典型场景，自动选择合适的起算时间。
 - **保持到期逻辑不变**：`expired_at` 仍按照周期（按月）延长，与核心的 `OrderService` 保持一致。
 - **流量重置同步**：当系统执行流量重置 (`traffic.reset.after`) 时，为带标签的用户重新计算 `next_reset_at`，确保周期连续。
-- **定时巡检修正**：可通过配置指定巡检间隔，按最新标签及重置记录自动纠正 `next_reset_at`。
+- **定时巡检修正**：可通过配置指定巡检间隔，仅扫描带标签套餐下仍有效的用户，按最新标签及重置记录自动纠正 `next_reset_at`。
 - **详细日志**：订单开通前后都会写入结构化日志，便于排查实际执行路径及计算结果。
 
 ## 标签定义
@@ -45,7 +45,7 @@ interval_days:7
 - `order.open.before`：记录订单处理前的用户状态（套餐 ID、到期时间、下次重置时间）。
 - `order.open.after`：依据场景重新计算 `expired_at` 与 `next_reset_at`，并保存变更。
 - `traffic.reset.after`：在系统重置流量后为带标签用户计算新的 `next_reset_at`。
-- 定时任务：当配置 `sync_interval_minutes` > 0 时，按设定间隔扫描带标签的用户，根据最新标签和重置记录修正下一次流量重置时间。
+- 定时任务：当配置 `sync_interval_minutes` > 0 时，按设定间隔扫描带 `interval_days` 标签套餐下且未过期的用户，根据最新标签和重置记录修正下一次流量重置时间。
 
 ## 配置项
 
@@ -63,7 +63,7 @@ interval_days:7
     "type": "number",
     "default": 0,
     "label": "巡检间隔（分钟）",
-    "description": "0 表示不自动巡检，可临时设置为 N 分钟以触发批量扫描与修正。"
+    "description": "0 表示不自动巡检，可临时设置为 N 分钟以触发带标签且未过期用户的批量扫描与修正。"
   }
 }
 ```
@@ -77,4 +77,5 @@ interval_days:7
 ## 排查建议
 
 - 关注日志中 `custom_traffic_reset.*` 相关条目，快速定位订单场景及结果。
-- 若 `next_reset_at` 未更新，确认套餐是否已设置正确标签，以及插件开关是否启用。*** End Patch*** End Patch**?** Wait format off? Need ensure apply_patch format proper: begin patch etc. Need newlines. Do again carefully.
+- 若 `next_reset_at` 未更新，确认套餐是否已设置正确标签，以及插件开关是否启用。
+- 若巡检任务未生效，优先确认用户套餐是否包含 `interval_days:<天数>` 标签，且用户仍处于有效期内。
