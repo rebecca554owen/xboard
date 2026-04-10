@@ -2,11 +2,15 @@
 
 namespace Plugin\SubscriptionStatistics;
 
+use App\Models\StatUser;
 use App\Models\User;
 use App\Services\Plugin\AbstractPlugin;
 use App\Services\TelegramService;
+use App\Utils\Helper;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
 
 class Plugin extends AbstractPlugin
@@ -357,6 +361,7 @@ class Plugin extends AbstractPlugin
             $rank = $index + 1;
             $frequencyIcon = $this->getFrequencyIcon($user['count']);
             $report[] = "{$rank}. `{$user['email']}`：{$user['count']} 次 {$frequencyIcon}";
+            $report[] = "    └ 时段流量 {$user['period_traffic_formatted']} | 当前已用 {$user['used_traffic_formatted']} | 总流量 {$user['total_traffic_formatted']}";
         }
 
         return ['has_data' => true, 'report' => $report];
@@ -443,13 +448,13 @@ class Plugin extends AbstractPlugin
                 'avgIPPerUser' => round($uniqueIPCount / max($uniqueUserCount, 1), 1),
                 'avgUAPerUser' => round($uniqueUACount / max($uniqueUserCount, 1), 1),
             ],
-            'userRanking' => $this->getUserRanking($dayKeys, $userLimit),
+            'userRanking' => $this->getUserRanking($dayKeys, $userLimit, $days),
             'uaRanking' => $this->getUaRanking($dayKeys, $uaLimit),
             'ipRanking' => $this->getIpRanking($dayKeys, $ipLimit),
         ];
     }
 
-    private function getUserRanking(array $dayKeys, int $limit)
+    private function getUserRanking(array $dayKeys, int $limit, int $days)
     {
         if ($limit <= 0) {
             return collect();
@@ -459,13 +464,98 @@ class Plugin extends AbstractPlugin
         $ranking = [];
 
         foreach ($entries as $email => $count) {
+            if (!is_scalar($email)) {
+                continue;
+            }
+
             $ranking[] = [
-                'email' => $email,
+                'email' => (string) $email,
                 'count' => (int) $count,
             ];
         }
 
-        return collect($ranking);
+        return $this->attachUserTrafficData(collect($ranking), $days);
+    }
+
+    private function attachUserTrafficData(Collection $ranking, int $days): Collection
+    {
+        if ($ranking->isEmpty()) {
+            return $ranking;
+        }
+
+        $users = $this->getUsersByEmail(
+            $ranking->pluck('email')
+                ->filter(fn ($email) => $email !== '未知用户')
+                ->unique()
+                ->values()
+                ->all()
+        );
+
+        $periodTrafficByEmail = $this->getPeriodTrafficByEmail($users, $days);
+
+        return $ranking->map(function (array $item) use ($users, $periodTrafficByEmail) {
+            $user = $users->get($item['email']);
+            $usedTraffic = (int) (($user->u ?? 0) + ($user->d ?? 0));
+            $totalTraffic = (int) ($user->transfer_enable ?? 0);
+            $periodTraffic = (int) ($periodTrafficByEmail[$item['email']] ?? 0);
+
+            return array_merge($item, [
+                'period_traffic' => $periodTraffic,
+                'used_traffic' => $usedTraffic,
+                'total_traffic' => $totalTraffic,
+                'period_traffic_formatted' => Helper::trafficConvert($periodTraffic),
+                'used_traffic_formatted' => Helper::trafficConvert($usedTraffic),
+                'total_traffic_formatted' => Helper::trafficConvert($totalTraffic),
+            ]);
+        });
+    }
+
+    private function getUsersByEmail(array $emails): Collection
+    {
+        if (empty($emails)) {
+            return collect();
+        }
+
+        return User::query()
+            ->select(['id', 'email', 'u', 'd', 'transfer_enable'])
+            ->whereIn('email', $emails)
+            ->get()
+            ->keyBy('email');
+    }
+
+    private function getPeriodTrafficByEmail(Collection $users, int $days): array
+    {
+        if ($users->isEmpty()) {
+            return [];
+        }
+
+        $trafficByUserId = [];
+        try {
+            $timeRange = $this->getStatTimeRange($days);
+            $trafficRows = StatUser::query()
+                ->select('user_id', DB::raw('SUM(u + d) as total_traffic'))
+                ->whereIn('user_id', $users->pluck('id')->all())
+                ->where('record_at', '>=', $timeRange['startAt'])
+                ->where('record_at', '<', $timeRange['endAt'])
+                ->groupBy('user_id')
+                ->get();
+
+            foreach ($trafficRows as $row) {
+                $trafficByUserId[(int) $row->user_id] = (int) $row->total_traffic;
+            }
+        } catch (\Throwable $e) {
+            \Log::warning('SubscriptionStatistics period traffic fallback to zero', [
+                'error' => $e->getMessage(),
+                'days' => $days,
+            ]);
+        }
+
+        $trafficByEmail = [];
+        foreach ($users as $email => $user) {
+            $trafficByEmail[(string) $email] = $trafficByUserId[(int) $user->id] ?? 0;
+        }
+
+        return $trafficByEmail;
     }
 
     private function getUaRanking(array $dayKeys, int $limit)
@@ -478,10 +568,14 @@ class Plugin extends AbstractPlugin
         $ranking = [];
 
         foreach ($entries as $ua => $count) {
+            if (!is_scalar($ua)) {
+                continue;
+            }
+
             $ranking[] = [
-                'ua' => $ua,
+                'ua' => (string) $ua,
                 'count' => (int) $count,
-                'users' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ua_users', $ua)),
+                'users' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ua_users', (string) $ua)),
             ];
         }
 
@@ -498,11 +592,15 @@ class Plugin extends AbstractPlugin
         $ranking = [];
 
         foreach ($entries as $ip => $count) {
+            if (!is_scalar($ip)) {
+                continue;
+            }
+
             $ranking[] = [
-                'ip' => $ip,
+                'ip' => (string) $ip,
                 'count' => (int) $count,
-                'unique_users' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ip_users', $ip)),
-                'unique_uas' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ip_uas', $ip)),
+                'unique_users' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ip_users', (string) $ip)),
+                'unique_uas' => $this->getUnionSetCount($this->buildMemberSetKeys($dayKeys, 'ip_uas', (string) $ip)),
             ];
         }
 
@@ -511,28 +609,54 @@ class Plugin extends AbstractPlugin
 
     private function getMergedSortedSetEntries(array $dayKeys, string $metric, int $limit): array
     {
+        $redis = Redis::connection();
         $sourceKeys = [];
         foreach ($dayKeys as $dayKey) {
             $sourceKeys[] = $this->getDayMetricKeys($dayKey)[$metric];
         }
 
-        $redis = Redis::connection();
-
         if (count($sourceKeys) === 1) {
             $entries = $redis->zrevrange($sourceKeys[0], 0, $limit - 1, true);
-            return is_array($entries) ? $entries : [];
+            return $this->normalizeSortedSetEntries($entries);
         }
 
-        $tempKey = $this->buildTempKey($metric);
-        $redis->zunionstore($tempKey, $sourceKeys);
-        $redis->expire($tempKey, self::TEMP_KEY_TTL);
-
-        try {
-            $entries = $redis->zrevrange($tempKey, 0, $limit - 1, true);
-            return is_array($entries) ? $entries : [];
-        } finally {
-            $redis->del($tempKey);
+        $merged = [];
+        foreach ($sourceKeys as $sourceKey) {
+            $entries = $this->normalizeSortedSetEntries($redis->zrevrange($sourceKey, 0, -1, true));
+            foreach ($entries as $member => $score) {
+                $merged[$member] = ($merged[$member] ?? 0) + $score;
+            }
         }
+
+        arsort($merged, SORT_NUMERIC);
+
+        return array_slice($merged, 0, $limit, true);
+    }
+
+    private function normalizeSortedSetEntries($entries): array
+    {
+        if (!is_array($entries)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($entries as $member => $score) {
+            if (is_array($score)) {
+                $itemMember = $score[0] ?? $score['member'] ?? null;
+                $itemScore = $score[1] ?? $score['score'] ?? 0;
+            } else {
+                $itemMember = $member;
+                $itemScore = $score;
+            }
+
+            if (!is_scalar($itemMember)) {
+                continue;
+            }
+
+            $normalized[(string) $itemMember] = (float) $itemScore;
+        }
+
+        return $normalized;
     }
 
     private function sumStringValues(array $keys): int
@@ -562,15 +686,23 @@ class Plugin extends AbstractPlugin
             return (int) $redis->scard($keys[0]);
         }
 
-        $tempKey = $this->buildTempKey('set');
-        $redis->sunionstore($tempKey, $keys);
-        $redis->expire($tempKey, self::TEMP_KEY_TTL);
+        $members = [];
+        foreach ($keys as $key) {
+            $setMembers = $redis->smembers($key);
+            if (!is_array($setMembers)) {
+                continue;
+            }
 
-        try {
-            return (int) $redis->scard($tempKey);
-        } finally {
-            $redis->del($tempKey);
+            foreach ($setMembers as $member) {
+                if (!is_scalar($member)) {
+                    continue;
+                }
+
+                $members[(string) $member] = true;
+            }
         }
+
+        return count($members);
     }
 
     private function buildMemberSetKeys(array $dayKeys, string $metric, string $member): array
@@ -712,6 +844,17 @@ class Plugin extends AbstractPlugin
                 'endAt' => time()
             ]
         };
+    }
+
+    private function getStatTimeRange(int $days): array
+    {
+        $timezone = config('app.timezone');
+        $timeRange = $this->getTimeRange($days);
+
+        return [
+            'startAt' => $timeRange['startAt'],
+            'endAt' => max($timeRange['startAt'] + 1, $timeRange['endAt']),
+        ];
     }
 
     private function getRealIpAddress(Request $request): string

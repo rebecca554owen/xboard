@@ -1,142 +1,70 @@
-# 流量耗尽自动重置插件（TrafficReset）
+# 流量耗尽周期兑换插件（TrafficReset）
 
 ## 插件简介
 
-该插件监控用户流量使用情况，当用户流量用尽时自动触发提前重置，缩短用户有效期并重置流量，实现"流量用尽即重置"的自动化管理。
+该插件用于把用户剩余的有效期兑换成新的流量周期使用。
 
-## 核心功能
+当用户流量达到设定阈值时，插件会检查当前套餐对应的周期长度。如果用户剩余有效期还能覆盖至少一个完整周期，就先从 `expired_at` 扣掉一个完整周期，再调用主系统流量重置服务，让用户立即进入新的周期继续使用。
 
-### 1. 流量耗尽检测
-- 实时监控用户流量使用率（99%阈值）
-- 仅对有套餐、未封禁且仍在有效期内的用户生效
-- 支持自定义周期和系统默认周期的用户
+## 设计原则
 
-### 2. 智能重置策略
-- **按月结日**：将到期日提前至今日对应的结日
-- **每月一号**：直接回拨一个月保持时分秒
-- **自定义周期**：从原到期时间中扣除一个周期
+- 只负责周期兑换判定，不重复实现主系统流量重置
+- 不直接写 `next_reset_at`，统一交给主系统根据新的 `expired_at` 计算
+- 周期锚点保持稳定，不随定时任务执行时刻漂移
+- 每次命中只兑换一个完整周期，不做比例折算
 
-### 3. 条件验证
-- 检查用户剩余时间是否足够一个周期
-- 验证套餐重置策略是否支持自动重置
-- 确保重置操作不会导致用户立即过期
+## 支持的周期类型
 
-## 配置项说明
+- `按月结日`
+- `每月 1 号`
+- `按年结日`
+- `每年 1 月 1 日`
 
-| 配置项 | 说明 | 默认值 | 类型 |
-| --- | --- | --- | --- |
-| `enable_auto_reset` | 启用自动重置 | `true` | boolean |
-| `schedule_frequency` | 定时任务频率 | `hourly` | select |
-| `batch_size` | 批处理用户数量 | `100` | number |
-| `auto_reset_on_exceed_monthly` | 按月结日重置 | `true` | boolean |
-| `auto_reset_on_exceed_first_day` | 每月一号重置 | `true` | boolean |
-| `auto_reset_on_exceed_custom` | 自定义周期重置 | `true` | boolean |
+如果套餐为“跟随系统设置”，插件会先解析为当前系统默认的重置方式。
 
-**定时任务频率说明：**
-- `minutely`：每分钟执行一次
-- `hourly`：每小时执行一次
-- `daily`：每天00:00执行一次
+如果最终解析为“不重置”，则不会参与兑换。
 
 ## 执行逻辑
 
-### 用户筛选条件
-```sql
-SELECT * FROM users
-WHERE transfer_enable > 0
-  AND banned = 0
-  AND expired_at IS NOT NULL
-  AND expired_at > 当前时间
-  AND (u + d) >= transfer_enable * 0.99
-  AND plan_id IS NOT NULL
-```
+### 用户筛选
 
-插件还会按当前开关缩小套餐扫描范围：
+插件仅扫描满足以下条件的用户：
 
-- 开启 `auto_reset_on_exceed_custom` 时，仅匹配带 `interval_days:` 标签的套餐
-- 开启 `auto_reset_on_exceed_monthly` / `auto_reset_on_exceed_first_day` 时，仅匹配对应重置策略套餐
-- 三种策略都关闭时，任务会直接跳过本轮扫描
+- `transfer_enable > 0`
+- `banned = 0`
+- `plan_id` 不为空
+- `expired_at` 不为空且仍在有效期内
+- 流量使用率达到 `usage_threshold_percent`
 
-### 重置条件验证
+### 周期兑换
 
-#### 自定义周期用户
-```php
-// 检查剩余时间是否大于周期天数
-$remainingDays = ($user->expired_at - time()) / 86400;
-if ($remainingDays <= $intervalDays) {
-    return false; // 跳过重置
-}
-```
+触发后，插件会：
 
-#### 系统默认周期用户
-```php
-// 按月结日和每月一号都按30天计算
-$requiredDays = 30;
-$remainingDays = ($user->expired_at - time()) / 86400;
-if ($remainingDays <= $requiredDays) {
-    return false; // 跳过重置
-}
-```
+1. 重新锁定并读取用户最新状态
+2. 解析套餐对应的周期类型
+3. 判断扣掉一个完整周期后是否仍然有效
+4. 先写入新的 `expired_at`
+5. 调用主系统 `TrafficResetService::performReset()`
+6. 由主系统重新计算 `next_reset_at`
 
-### 重置时间计算
+如果任一步骤失败，本次兑换会整体回滚。
 
-#### 按月结日重置
-```php
-$currentDay = (int) date('d');
-$expireDay = (int) date('d', $currentExpiredAt);
-$daysDiff = $expireDay - $currentDay;
+## 配置项
 
-$newExpiredAt = $daysDiff > 0
-    ? strtotime("-$daysDiff days", $currentExpiredAt)
-    : strtotime('-1 month', $currentExpiredAt);
-```
+| 配置项 | 说明 | 默认值 |
+| --- | --- | --- |
+| `enabled` | 是否启用周期兑换 | `true` |
+| `schedule_frequency` | 扫描频率 | `hourly` |
+| `batch_size` | 每批次处理用户数 | `100` |
+| `usage_threshold_percent` | 触发阈值百分比 | `99` |
+| `enable_monthly` | 是否启用按月结日 | `true` |
+| `enable_first_day_month` | 是否启用每月 1 号 | `true` |
+| `enable_yearly` | 是否启用按年结日 | `true` |
+| `enable_first_day_year` | 是否启用每年 1 月 1 日 | `true` |
 
-#### 每月一号重置
-```php
-$newExpiredAt = strtotime('-1 month', $currentExpiredAt);
-```
+## 和旧版本的差异
 
-#### 自定义周期重置
-```php
-$newExpiredAt = strtotime("-{$intervalDays} days", $currentExpiredAt);
-```
-
-## 套餐标签支持
-
-### 自定义周期识别
-插件自动识别套餐标签中的 `interval_days:N` 配置：
-
-```
-interval_days:7     # 每周重置周期
-interval_days:15    # 每半月重置周期
-interval_days:30    # 每月重置周期
-```
-
-### 重置策略映射
-```php
-$mapping = [
-    null => '跟随系统设置',
-    Plan::RESET_TRAFFIC_FIRST_DAY_MONTH => '每月 1 号',
-    Plan::RESET_TRAFFIC_MONTHLY => '按月结日',
-    Plan::RESET_TRAFFIC_NEVER => '不重置',
-    Plan::RESET_TRAFFIC_FIRST_DAY_YEAR => '每年 1 月 1 日',
-    Plan::RESET_TRAFFIC_YEARLY => '按年结日',
-];
-```
-
-## 技术特性
-
-- **事务安全**：所有重置操作在数据库事务中执行
-- **批量处理**：支持分批处理大量用户，避免数据库压力
-- **条件验证**：严格的剩余时间验证，防止用户立即过期
-- **错误恢复**：单个用户重置失败不影响其他用户
-- **详细日志**：记录完整的重置过程和策略信息
-- **兼容性**：与 CustomTrafficReset 插件完全兼容
-- **性能优化**：仅扫描仍有效且可能命中的套餐用户，减少高频任务的无效遍历
-
-## 使用建议
-
-1. **频率设置**：建议设置为每小时执行，平衡实时性和性能
-2. **批量大小**：根据服务器性能调整批处理数量
-3. **策略配置**：根据业务需求选择支持的重置策略
-4. **监控日志**：定期检查重置日志，了解系统运行状况
-5. **测试验证**：在生产环境启用前，先在测试环境验证重置逻辑
+- 从“提前重置”改为“周期兑换”
+- 周期类型配置恢复为独立布尔开关，便于后台直接勾选
+- 保留旧配置的运行时兼容映射
+- 不再承诺兼容 `CustomTrafficReset`

@@ -1,24 +1,24 @@
 {
-    "name": "流量耗尽自动重置",
+    "name": "流量耗尽周期兑换",
     "code": "traffic_reset",
-    "version": "1.0.5",
-    "description": "检测有效用户流量用尽后，自动缩短有效期并触发流量重置。",
+    "version": "2.0.0",
+    "description": "当用户流量耗尽时，扣减一个完整周期的剩余有效期并立即进入新的流量周期。",
     "author": "周宇航",
     "require": {
         "xboard": "^1.0.0"
     },
     "config": {
-        "enable_auto_reset": {
+        "enabled": {
             "type": "boolean",
             "default": true,
-            "label": "启用自动重置",
-            "description": "关闭后仅保留系统手动重置，定时任务不会再触发流量重置。"
+            "label": "启用周期兑换",
+            "description": "关闭后不再扫描流量耗尽用户。"
         },
         "schedule_frequency": {
             "type": "select",
             "default": "hourly",
             "label": "定时任务频率",
-            "description": "配置定时检测的执行频率，用于扫描流量耗尽的用户。",
+            "description": "扫描流量耗尽用户的执行频率。",
             "options": [
                 {"value": "minutely", "label": "每分钟"},
                 {"value": "hourly", "label": "每小时"},
@@ -28,28 +28,42 @@
         "batch_size": {
             "type": "number",
             "default": 100,
-            "min": 10,
+            "min": 1,
             "max": 10000,
-            "label": "批处理用户数量",
-            "description": "每批次最多处理的用户数，任务仅扫描仍在有效期内且可能命中的用户。"
+            "label": "批处理数量",
+            "description": "每批次最多处理的用户数。"
         },
-        "auto_reset_on_exceed_monthly": {
+        "usage_threshold_percent": {
+            "type": "number",
+            "default": 99,
+            "min": 1,
+            "max": 100,
+            "label": "触发阈值(%)",
+            "description": "用户流量使用率达到该阈值后，才尝试兑换下一个周期。"
+        },
+        "enable_monthly": {
             "type": "boolean",
             "default": true,
-            "label": "按月结日重置",
-            "description": "当套餐为【按月结日】重置方式且流量用尽时，是否允许提前执行重置。"
+            "label": "启用按月结日",
+            "description": "允许对按月结日套餐执行周期兑换。"
         },
-        "auto_reset_on_exceed_first_day": {
+        "enable_first_day_month": {
             "type": "boolean",
             "default": true,
-            "label": "每月一号重置",
-            "description": "当套餐为【每月一号】重置方式且流量用尽时，是否允许提前执行重置。"
+            "label": "启用每月 1 号",
+            "description": "允许对每月 1 号重置套餐执行周期兑换。"
         },
-        "auto_reset_on_exceed_custom": {
+        "enable_yearly": {
             "type": "boolean",
             "default": true,
-            "label": "自定义周期重置",
-            "description": "当套餐使用【自定义重置周期】且流量用尽时，是否允许提前执行重置。"
+            "label": "启用按年结日",
+            "description": "允许对按年结日套餐执行周期兑换。"
+        },
+        "enable_first_day_year": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用每年 1 月 1 日",
+            "description": "允许对每年 1 月 1 日重置套餐执行周期兑换。"
         }
     }
 }
