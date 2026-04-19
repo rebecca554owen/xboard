@@ -32,3 +32,5 @@ compose.yaml
 compose.host.yaml
 compose.split.yaml
 .scribe
+CLAUDE.md
+.claude/
