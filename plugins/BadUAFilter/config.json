@@ -1,0 +1,24 @@
+{
+    "name": "可疑UA过滤",
+    "code": "bad_ua_filter",
+    "version": "1.0.0",
+    "description": "检测订阅请求中的可疑 User-Agent，自动重置用户 token 并重定向",
+    "author": "xboard",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "suspicious_uas": {
+            "type": "string",
+            "default": "west2online,Telegram,WeChat,Weixin,Weibo,Sogou,socks,v2raytun,None,Baidu,subconverter,qq,sstap,360,Tencent,python-requests/2.9.1,python-requests/2.22.0,clash-verge/v1.3.8,clashR,v2rayN/6.23,v2rayNG/1.8.5,shadowrocket/1.9.8,Quantumult,Loon/2.1.0,Surfboard/2.15.0,ShadowsocksX-NG,SSD,Surge,smart,Go-http-client,wxwork,Mozilla",
+            "label": "可疑 UA 关键词",
+            "description": "多个关键词用英文逗号分隔，不区分大小写"
+        },
+        "redirect_url": {
+            "type": "string",
+            "default": "https://www.bing.com",
+            "label": "重定向目标 URL",
+            "description": "检测到可疑 UA 后重定向到此地址"
+        }
+    }
+}
