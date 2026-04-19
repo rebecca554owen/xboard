@@ -1,0 +1,24 @@
+{
+    "name": "订阅通知",
+    "code": "subscribe_notify",
+    "version": "1.0.0",
+    "description": "用户更新订阅时向管理员发送 Telegram 通知，包含邮箱、IP、地区、UA、流量、到期等信息",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "notify_staff": {
+            "type": "boolean",
+            "default": false,
+            "label": "同时通知 Staff",
+            "description": "开启后 is_staff=1 的员工也会收到通知"
+        },
+        "show_invite_email": {
+            "type": "boolean",
+            "default": true,
+            "label": "显示邀请人邮箱",
+            "description": "通知中是否包含邀请人邮箱"
+        }
+    }
+}
