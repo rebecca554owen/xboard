@@ -1,0 +1,24 @@
+{
+    "name": "每日签到",
+    "code": "check_in",
+    "version": "1.0.0",
+    "description": "Telegram 机器人 /checkin 命令，每日签到随机获得流量",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "min_traffic_mb": {
+            "type": "number",
+            "default": 0,
+            "label": "最小流量 (MB)",
+            "description": "签到随机流量的最小值"
+        },
+        "max_traffic_mb": {
+            "type": "number",
+            "default": 1024,
+            "label": "最大流量 (MB)",
+            "description": "签到随机流量的最大值"
+        }
+    }
+}
