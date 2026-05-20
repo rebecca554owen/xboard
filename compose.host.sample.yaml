@@ -9,6 +9,14 @@ services:
       - ./storage/logs:/www/storage/logs
       - ./storage/theme:/www/storage/theme
       - ./plugins:/www/plugins
+      - ./QuantumultX.php:/www/app/Protocols/QuantumultX.php
+      - ./StatController.php:/www/app/Http/Controllers/V2/Admin/StatController.php
+      - ./MigrateFromV2b.php:/www/app/Console/Commands/MigrateFromV2b.php
+      - ./OriginV2bMigrationsTableSeeder.php:/www/database/seeders/OriginV2bMigrationsTableSeeder.php
+      - ./database/migrations/2023_09_24_040317_add_column_network_and_network_settings_to_v2_server_trojan.php:/www/database/migrations/2023_09_24_040317_add_column_network_and_network_settings_to_v2_server_trojan.php
+      - ./database/migrations/2023_09_29_044957_add_column_version_and_is_obfs_to_server_hysteria_table.php:/www/database/migrations/2023_09_29_044957_add_column_version_and_is_obfs_to_server_hysteria_table.php
+      - ./database/migrations/2025_01_10_152139_add_device_limit_column.php:/www/database/migrations/2025_01_10_152139_add_device_limit_column.php
+      - ./v2board.php:/www/config/v2board.php
       - redis-data:/data
     environment:
       - RESOURCE_PROFILE=balanced      # minimal | balanced | performance | auto

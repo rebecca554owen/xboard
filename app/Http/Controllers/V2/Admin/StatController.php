@@ -13,6 +13,7 @@ use App\Models\Ticket;
 use App\Models\User;
 use App\Services\StatisticalService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Schema;
 
 class StatController extends Controller
 {
@@ -23,13 +24,18 @@ class StatController extends Controller
     }
     public function getOverride(Request $request)
     {
+        $trafficMultiplier = 2;
+
         // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
+        $onlineNodes = Schema::hasTable('v2_server')
+            ? Server::all()->filter(function ($server) {
+                return !!$server->is_online;
+            })->count()
+            : 0;
         // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
+        $onlineDevices = Schema::hasColumn('v2_user', 'online_count')
+            ? User::where('t', '>=', time() - 600)->sum('online_count')
+            : 0;
         $onlineUsers = User::where('t', '>=', time() - 600)
             ->count();
 
@@ -62,11 +68,13 @@ class StatController extends Controller
                     ->count(),
                 'ticket_pending_total' => Ticket::where('status', 0)
                     ->count(),
-                'commission_pending_total' => Order::where('commission_status', 0)
-                    ->where('invite_user_id', '!=', NULL)
-                    ->whereNotIn('status', [0, 2])
-                    ->where('commission_balance', '>', 0)
-                    ->count(),
+                'commission_pending_total' => Schema::hasColumn('v2_order', 'commission_status')
+                    ? Order::where('commission_status', 0)
+                        ->where('invite_user_id', '!=', NULL)
+                        ->whereNotIn('status', [0, 2])
+                        ->where('commission_balance', '>', 0)
+                        ->count()
+                    : 0,
                 'day_income' => Order::where('created_at', '>=', strtotime(date('Y-m-d')))
                     ->where('created_at', '<', time())
                     ->whereNotIn('status', [0, 2])
@@ -85,20 +93,24 @@ class StatController extends Controller
                 'online_nodes' => $onlineNodes,
                 'online_devices' => $onlineDevices,
                 'online_users' => $onlineUsers,
+                'traffic_multiplier' => $trafficMultiplier,
                 'today_traffic' => [
-                    'upload' => $todayTraffic->upload ?? 0,
-                    'download' => $todayTraffic->download ?? 0,
-                    'total' => $todayTraffic->total ?? 0
+                    'upload' => ($todayTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($todayTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($todayTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ],
                 'month_traffic' => [
-                    'upload' => $monthTraffic->upload ?? 0,
-                    'download' => $monthTraffic->download ?? 0,
-                    'total' => $monthTraffic->total ?? 0
+                    'upload' => ($monthTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($monthTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($monthTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ],
                 'total_traffic' => [
-                    'upload' => $totalTraffic->upload ?? 0,
-                    'download' => $totalTraffic->download ?? 0,
-                    'total' => $totalTraffic->total ?? 0
+                    'upload' => ($totalTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($totalTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($totalTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ]
             ]
         ];
@@ -257,6 +269,7 @@ class StatController extends Controller
      */
     public function getStats()
     {
+        $trafficMultiplier = 2;
         $currentMonthStart = strtotime(date('Y-m-01'));
         $lastMonthStart = strtotime('-1 month', $currentMonthStart);
         $twoMonthsAgoStart = strtotime('-2 month', $currentMonthStart);
@@ -266,13 +279,16 @@ class StatController extends Controller
         $yesterdayStart = strtotime('-1 day', $todayStart);
 
         // 获取在线节点数
-        $onlineNodes = Server::all()->filter(function ($server) {
-            return !!$server->is_online;
-        })->count();
+        $onlineNodes = Schema::hasTable('v2_server')
+            ? Server::all()->filter(function ($server) {
+                return !!$server->is_online;
+            })->count()
+            : 0;
 
         // 获取在线设备数和在线用户数
-        $onlineDevices = User::where('t', '>=', time() - 600)
-            ->sum('online_count');
+        $onlineDevices = Schema::hasColumn('v2_user', 'online_count')
+            ? User::where('t', '>=', time() - 600)->sum('online_count')
+            : 0;
         $onlineUsers = User::where('t', '>=', time() - 600)
             ->count();
 
@@ -365,11 +381,13 @@ class StatController extends Controller
 
         // 获取待处理工单和佣金数据
         $ticketPendingTotal = Ticket::where('status', 0)->count();
-        $commissionPendingTotal = Order::where('commission_status', 0)
-            ->where('invite_user_id', '!=', NULL)
-            ->whereIn('status', [Order::STATUS_COMPLETED])
-            ->where('commission_balance', '>', 0)
-            ->count();
+        $commissionPendingTotal = Schema::hasColumn('v2_order', 'commission_status')
+            ? Order::where('commission_status', 0)
+                ->where('invite_user_id', '!=', NULL)
+                ->whereIn('status', [Order::STATUS_COMPLETED])
+                ->where('commission_balance', '>', 0)
+                ->count()
+            : 0;
 
         return [
             'data' => [
@@ -400,22 +418,26 @@ class StatController extends Controller
 
                 // 节点相关
                 'onlineNodes' => $onlineNodes,
+                'trafficMultiplier' => $trafficMultiplier,
 
                 // 流量统计
                 'todayTraffic' => [
-                    'upload' => $todayTraffic->upload ?? 0,
-                    'download' => $todayTraffic->download ?? 0,
-                    'total' => $todayTraffic->total ?? 0
+                    'upload' => ($todayTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($todayTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($todayTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ],
                 'monthTraffic' => [
-                    'upload' => $monthTraffic->upload ?? 0,
-                    'download' => $monthTraffic->download ?? 0,
-                    'total' => $monthTraffic->total ?? 0
+                    'upload' => ($monthTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($monthTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($monthTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ],
                 'totalTraffic' => [
-                    'upload' => $totalTraffic->upload ?? 0,
-                    'download' => $totalTraffic->download ?? 0,
-                    'total' => $totalTraffic->total ?? 0
+                    'upload' => ($totalTraffic->upload ?? 0) * $trafficMultiplier,
+                    'download' => ($totalTraffic->download ?? 0) * $trafficMultiplier,
+                    'total' => ($totalTraffic->total ?? 0) * $trafficMultiplier,
+                    'multiplier' => $trafficMultiplier
                 ]
             ]
         ];

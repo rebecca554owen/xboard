@@ -89,7 +89,7 @@ class QuantumultX extends AbstractProtocol
         $addr = Helper::wrapIPv6($server['host']);
         $config = [
             "vmess={$addr}:{$server['port']}",
-            "method=" . data_get($protocol_settings, 'cipher', 'auto'),
+            'method=chacha20-poly1305',
             "password={$uuid}",
         ];
 
