@@ -1,0 +1,161 @@
+{
+  "code": "subscribe_security_control",
+  "name": "订阅安全控制",
+  "version": "2.1.1",
+  "description": "Xboard 订阅安全控制插件：UA 白名单、IP/用户频率限制、防扫描响应。",
+  "author": "周宇航",
+  "type": "feature",
+  "require": {
+    "xboard": ">=1.0.0"
+  },
+  "config": {
+    "enable": {
+      "description": "是否启用订阅安全控制",
+      "type": "boolean",
+      "default": true,
+      "label": "启用插件"
+    },
+    "whitelist_mode": {
+      "description": "只允许白名单中的User-Agent访问",
+      "type": "boolean",
+      "default": true,
+      "label": "启用白名单模式"
+    },
+    "ua_whitelist": {
+      "description": "允许访问的 User-Agent 列表，每行一个；宽松模式为包含匹配，严格模式为完全匹配。",
+      "type": "text",
+      "default": "Clash\nClash Meta\nClash for Windows\nClash for Android\nClash for iOS\nClashX\nClashX Pro\nFlClash\nclash-verge\nclash-nyanpasu\nSurge\nQuantumult\nQuantumult X\nShadowrocket\nLoon\nPharos\nStash\nSing-Box\nv2rayN\nv2rayNG\nNekoBox\nNekoRay\nHiddify\nFairVPN\nStreisand\nOutline\nShadowsocks\nV2Ray\nXray\nTrojan\nWireGuard\nKitsunebi\nPepi\nPotatso\nWingy\nSpectre\nShadowLink\nA2raycon\nNextin\npasswall",
+      "label": "User-Agent白名单"
+    },
+    "strict_mode": {
+      "description": "启用严格模式，要求User-Agent完全匹配",
+      "type": "boolean",
+      "default": false,
+      "label": "严格模式"
+    },
+    "allow_empty_ua": {
+      "description": "是否允许空的User-Agent访问",
+      "type": "boolean",
+      "default": false,
+      "label": "允许空User-Agent"
+    },
+    "user_daily_limit_enable": {
+      "description": "限制每个用户每天可以获取订阅的次数",
+      "type": "boolean",
+      "default": false,
+      "label": "启用用户每日获取限制"
+    },
+    "user_daily_limit_count": {
+      "description": "每个用户每天最多可以获取订阅的次数",
+      "type": "number",
+      "default": 1000,
+      "min": 1,
+      "max": 10000,
+      "label": "用户每日获取次数"
+    },
+    "ip_limit_enable": {
+      "description": "限制单个IP的访问频率",
+      "type": "boolean",
+      "default": false,
+      "label": "启用IP访问频率限制"
+    },
+    "ip_limit_count": {
+      "description": "单个IP在指定时间窗口内的最大访问次数",
+      "type": "number",
+      "default": 100,
+      "min": 1,
+      "max": 1000,
+      "label": "IP访问次数限制"
+    },
+    "ip_limit_window": {
+      "description": "IP访问频率限制的时间窗口",
+      "type": "number",
+      "default": 3600,
+      "min": 60,
+      "max": 86400,
+      "label": "IP限制时间窗口(秒)"
+    },
+    "ip_whitelist": {
+      "description": "白名单中的IP不受限制，每行一个，支持CIDR格式",
+      "type": "text",
+      "default": "127.0.0.1\n::1",
+      "label": "IP白名单"
+    },
+    "trust_proxy_headers": {
+      "description": "仅当站点位于可信 Nginx/Cloudflare 等代理后方时开启；开启后才读取 CF-Connecting-IP、X-Real-IP、X-Forwarded-For。",
+      "type": "boolean",
+      "default": false,
+      "label": "信任代理/CDN IP头"
+    },
+    "block_response_type": {
+      "description": "当访问被阻止时的响应类型",
+      "type": "select",
+      "options": [
+        {
+          "value": "403",
+          "label": "403 Forbidden"
+        },
+        {
+          "value": "404",
+          "label": "404 Not Found"
+        },
+        {
+          "value": "empty",
+          "label": "空响应"
+        },
+        {
+          "value": "fake",
+          "label": "虚假订阅"
+        }
+      ],
+      "default": "404",
+      "label": "阻止响应类型"
+    },
+    "fake_subscription": {
+      "description": "当选择虚假订阅响应时返回的内容",
+      "type": "text",
+      "default": "# 无效的订阅链接\n# Invalid subscription link",
+      "label": "虚假订阅内容"
+    },
+    "log_enable": {
+      "description": "记录安全事件到日志文件",
+      "type": "boolean",
+      "default": true,
+      "label": "启用安全日志"
+    },
+    "alert_enable": {
+      "description": "当检测到异常访问达到阈值时写入 critical 告警日志",
+      "type": "boolean",
+      "default": false,
+      "label": "启用告警日志"
+    },
+    "alert_threshold": {
+      "description": "触发告警的访问次数阈值",
+      "type": "number",
+      "default": 100,
+      "min": 10,
+      "max": 1000,
+      "label": "告警阈值"
+    },
+    "auto_cleanup_enable": {
+      "description": "自动修剪插件缓存索引；不会清空仍在有效期内的限流计数，也不会改写 Laravel 日志。",
+      "type": "boolean",
+      "default": true,
+      "label": "启用自动清理"
+    },
+    "cache_cleanup_interval": {
+      "description": "自动修剪缓存索引的时间间隔",
+      "type": "number",
+      "default": 24,
+      "min": 1,
+      "max": 168,
+      "label": "缓存清理间隔(小时)"
+    },
+    "cleanup_on_startup": {
+      "description": "插件启动时自动执行一次清理",
+      "type": "boolean",
+      "default": false,
+      "label": "启动时清理"
+    }
+  }
+}
