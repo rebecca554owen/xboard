@@ -1,0 +1,30 @@
+{
+    "name": "订阅链接保护",
+    "code": "subscribe_guard",
+    "version": "1.0.0",
+    "description": "在用户未订阅或订阅过期时隐藏接口返回的订阅链接，防止第三方主题复制无效订阅地址",
+    "author": "周宇航",
+    "require": {
+        "xboard": ">=1.0.0"
+    },
+    "config": {
+        "enabled": {
+            "type": "boolean",
+            "default": true,
+            "label": "启用保护",
+            "description": "开启后，未订阅或订阅过期的用户将不会从用户订阅接口获得 subscribe_url 和 token"
+        },
+        "hide_when_expired": {
+            "type": "boolean",
+            "default": true,
+            "label": "过期时隐藏",
+            "description": "订阅已过期时隐藏订阅链接"
+        },
+        "hide_when_no_plan": {
+            "type": "boolean",
+            "default": true,
+            "label": "未订阅时隐藏",
+            "description": "用户没有订阅计划时隐藏订阅链接"
+        }
+    }
+}
