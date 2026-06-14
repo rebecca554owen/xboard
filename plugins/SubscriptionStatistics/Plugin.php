@@ -11,6 +11,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 
 class Plugin extends AbstractPlugin
@@ -264,7 +265,7 @@ class Plugin extends AbstractPlugin
 
     private function handleCommandError($message, \Throwable $e): void
     {
-        \Log::error('SubscriptionStatistics command failed', [
+        Log::error('SubscriptionStatistics command failed', [
             'error' => $e->getMessage(),
             'chat_id' => $message->chat_id,
             'command' => $message->text,
@@ -544,7 +545,7 @@ class Plugin extends AbstractPlugin
                 $trafficByUserId[(int) $row->user_id] = (int) $row->total_traffic;
             }
         } catch (\Throwable $e) {
-            \Log::warning('SubscriptionStatistics period traffic fallback to zero', [
+            Log::warning('SubscriptionStatistics period traffic fallback to zero', [
                 'error' => $e->getMessage(),
                 'days' => $days,
             ]);
@@ -848,7 +849,6 @@ class Plugin extends AbstractPlugin
 
     private function getStatTimeRange(int $days): array
     {
-        $timezone = config('app.timezone');
         $timeRange = $this->getTimeRange($days);
 
         return [
