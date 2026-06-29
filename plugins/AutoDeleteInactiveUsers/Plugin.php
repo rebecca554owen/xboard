@@ -154,7 +154,10 @@ class Plugin extends AbstractPlugin
                   ->whereNull('invited.id')  // 从未邀请过他人
                   ->whereNull('v2_user.plan_id')      // 未订阅
                   ->where('v2_user.transfer_enable', 0)  // 无流量
-                  ->where('v2_user.expired_at', 0);   // 未过期
+                  ->where(function ($query) {
+                      $query->where('v2_user.expired_at', 0)
+                            ->orWhereNull('v2_user.expired_at');
+                  });   // 兼容旧版 expired_at=0 与新版 expired_at=NULL 的未过期无效用户
         }
 
         // 性能优化：添加时间过滤，利用 created_at 索引
@@ -186,7 +189,10 @@ class Plugin extends AbstractPlugin
             ->whereNull('invited.id')  // 从未邀请过他人
             ->whereNull('v2_user.plan_id')      // 未订阅
             ->where('v2_user.transfer_enable', 0)  // 无流量
-            ->where('v2_user.expired_at', 0)   // 未过期
+            ->where(function ($query) {
+                $query->where('v2_user.expired_at', 0)
+                      ->orWhereNull('v2_user.expired_at');
+            })   // 兼容旧版 expired_at=0 与新版 expired_at=NULL 的未过期无效用户
             ->where('v2_user.created_at', '<', time() - ($days * 86400))
             ->count();
     }
@@ -266,4 +272,3 @@ class Plugin extends AbstractPlugin
         }
     }
 }
-
