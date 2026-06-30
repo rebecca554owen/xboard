@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\Log;
 class Plugin extends AbstractPlugin
 {
     private const LOCK_KEY = 'plugin:auto_delete_inactive_users:lock';
+    private const SCAN_CURSOR_KEY_PREFIX = 'plugin:auto_delete_inactive_users:scan_cursor:';
     private const LOCK_TTL = 300;
 
     public function boot(): void
@@ -53,37 +54,45 @@ class Plugin extends AbstractPlugin
 
         $days = max(1, (int) $this->getConfig('delete_days', 7));
         $batchSize = max(1, (int) $this->getConfig('batch_size', 100));
+        $maxBatchesPerRun = max(1, (int) $this->getConfig('max_batches_per_run', 10));
         $enableAutoDelete = (bool) $this->getConfig('enable_auto_delete', false);
         $deleteExpiredAfterDays = max(0, (int) $this->getConfig('delete_expired_users_after_days', 0));
 
         try {
+            $orphanTicketMessageCount = 0;
             $invalidUserCount = 0;
             $expiredUserCount = 0;
 
             if (!$enableAutoDelete) {
+                $orphanTicketMessageCount = $this->countOrphanTicketMessages();
                 $invalidUserCount = $this->countInvalidUsers($days);
                 $expiredUserCount = $this->countExpiredUsers($days, $deleteExpiredAfterDays);
             }
 
             if ($enableAutoDelete) {
+                $orphanTicketMessageCount = $this->deleteOrphanTicketMessages($batchSize);
                 $totalDeleted = 0;
                 $retryCount = 0;
                 $maxRetries = 3;
+                $processedBatches = 0;
+                $scanCursorKey = $this->getScanCursorKey($deleteExpiredAfterDays);
+                $scanCursorId = (int) Cache::get($scanCursorKey, 0);
 
-                while (true) {
-                    $candidates = $this->queryCandidateUsers($days, $batchSize, $deleteExpiredAfterDays);
+                while ($processedBatches < $maxBatchesPerRun) {
+                    $candidates = $this->queryCandidateUsers($days, $batchSize, $deleteExpiredAfterDays, $scanCursorId);
                     if ($candidates->isEmpty()) {
+                        if ($scanCursorId > 0) {
+                            Cache::forget($scanCursorKey);
+                            Log::info('扫描游标已到末尾，下轮将从头检查', [
+                                'mode' => $deleteExpiredAfterDays > 0 ? 'expired' : 'invalid',
+                                'last_cursor_id' => $scanCursorId,
+                            ]);
+                        }
                         break;
                     }
 
-                    $batchDeleted = 0;
-
-                    foreach ($candidates as $user) {
-                        if ($this->deleteUser($user)) {
-                            ++$batchDeleted;
-                            ++$totalDeleted;
-                        }
-                    }
+                    $batchDeleted = $this->deleteUsers($candidates);
+                    $totalDeleted += $batchDeleted;
 
                     if ($batchDeleted === 0) {
                         ++$retryCount;
@@ -96,7 +105,19 @@ class Plugin extends AbstractPlugin
                         }
                     } else {
                         $retryCount = 0;
+                        $scanCursorId = (int) $candidates->last()->id;
+                        Cache::forever($scanCursorKey, $scanCursorId);
                     }
+
+                    ++$processedBatches;
+                }
+
+                if ($processedBatches >= $maxBatchesPerRun) {
+                    Log::info('达到单轮最大批次数，等待下次调度继续', [
+                        'processed_batches' => $processedBatches,
+                        'max_batches_per_run' => $maxBatchesPerRun,
+                        'next_cursor_id' => $scanCursorId,
+                    ]);
                 }
 
                 if ($deleteExpiredAfterDays > 0) {
@@ -109,6 +130,12 @@ class Plugin extends AbstractPlugin
             }
 
             $totalDeleted = $invalidUserCount + $expiredUserCount;
+
+            if (!$enableAutoDelete && $orphanTicketMessageCount > 0) {
+                Log::warning(sprintf('[试运行]旧版删除遗留的孤儿工单消息%d条', $orphanTicketMessageCount));
+            } elseif ($enableAutoDelete && $orphanTicketMessageCount > 0) {
+                Log::info(sprintf('完成：清理旧版删除遗留的孤儿工单消息 %d 条', $orphanTicketMessageCount));
+            }
 
             if (!$enableAutoDelete && $totalDeleted > 0) {
                 $template = $deleteExpiredAfterDays > 0
@@ -135,7 +162,7 @@ class Plugin extends AbstractPlugin
     /**
      * @return Collection<int, User>
      */
-    protected function queryCandidateUsers(int $days, int $batchSize, int $deleteExpiredAfterDays = 0): Collection
+    protected function queryCandidateUsers(int $days, int $batchSize, int $deleteExpiredAfterDays = 0, int $afterId = 0): Collection
     {
         // 性能优化：使用 LEFT JOIN 替代 whereNotIn 子查询
         // 优化前：whereNotIn 需要执行子查询，随着用户表增长性能下降
@@ -158,6 +185,10 @@ class Plugin extends AbstractPlugin
                       $query->where('v2_user.expired_at', 0)
                             ->orWhereNull('v2_user.expired_at');
                   });   // 兼容旧版 expired_at=0 与新版 expired_at=NULL 的未过期无效用户
+        }
+
+        if ($afterId > 0) {
+            $query->where('v2_user.id', '>', $afterId);
         }
 
         // 性能优化：添加时间过滤，利用 created_at 索引
@@ -214,6 +245,40 @@ class Plugin extends AbstractPlugin
             ->count();
     }
 
+    protected function countOrphanTicketMessages(): int
+    {
+        return DB::table('v2_ticket_message')
+            ->leftJoin('v2_ticket', 'v2_ticket.id', '=', 'v2_ticket_message.ticket_id')
+            ->whereNull('v2_ticket.id')
+            ->count();
+    }
+
+    protected function deleteOrphanTicketMessages(int $batchSize): int
+    {
+        $messageIds = DB::table('v2_ticket_message')
+            ->leftJoin('v2_ticket', 'v2_ticket.id', '=', 'v2_ticket_message.ticket_id')
+            ->whereNull('v2_ticket.id')
+            ->orderBy('v2_ticket_message.id')
+            ->limit($batchSize)
+            ->pluck('v2_ticket_message.id');
+
+        if ($messageIds->isEmpty()) {
+            return 0;
+        }
+
+        $deleted = DB::table('v2_ticket_message')
+            ->whereIn('id', $messageIds)
+            ->delete();
+
+        Log::warning('已清理孤儿工单消息', [
+            'count' => $deleted,
+            'first_id' => $messageIds->first(),
+            'last_id' => $messageIds->last(),
+        ]);
+
+        return $deleted;
+    }
+
     /**
      * 构建基础查询
      *
@@ -230,45 +295,68 @@ class Plugin extends AbstractPlugin
             ->where('v2_user.commission_balance', 0);
     }
 
-    protected function deleteUser(User $user): bool
+    private function getScanCursorKey(int $deleteExpiredAfterDays): string
     {
+        return self::SCAN_CURSOR_KEY_PREFIX . ($deleteExpiredAfterDays > 0 ? 'expired' : 'invalid');
+    }
+
+    /**
+     * @param Collection<int, User> $users
+     */
+    protected function deleteUsers(Collection $users): int
+    {
+        $userIds = $users->pluck('id')
+            ->filter(fn ($id) => is_numeric($id) && (int) $id > 0)
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        if ($userIds->isEmpty()) {
+            Log::error('批量删除跳过：候选用户 ID 为空或无效');
+
+            return 0;
+        }
+
         try {
-            // 验证用户 ID 有效性，防止删除无效数据
-            if (!$user->id || $user->id <= 0) {
-                Log::error('尝试删除无效用户', [
-                    'user_id' => $user->id,
-                    'email' => $user->email ?? 'N/A',
-                ]);
-                return false;
-            }
+            $deleted = 0;
 
-            DB::beginTransaction();
+            DB::transaction(function () use ($userIds, &$deleted): void {
+                $ticketIds = DB::table('v2_ticket')
+                    ->whereIn('user_id', $userIds)
+                    ->pluck('id');
 
-            $user->orders()->delete();
-            $user->codes()->delete();
-            $user->stat()->delete();
-            $user->tickets()->delete();
-            $user->delete();
+                if ($ticketIds->isNotEmpty()) {
+                    DB::table('v2_ticket_message')
+                        ->whereIn('ticket_id', $ticketIds)
+                        ->delete();
+                }
 
-            DB::commit();
+                DB::table('v2_ticket_message')->whereIn('user_id', $userIds)->delete();
+                DB::table('v2_order')->whereIn('user_id', $userIds)->delete();
+                DB::table('v2_invite_code')->whereIn('user_id', $userIds)->delete();
+                DB::table('v2_stat_user')->whereIn('user_id', $userIds)->delete();
+                DB::table('v2_ticket')->whereIn('user_id', $userIds)->delete();
 
-            Log::warning(sprintf(
-                '已删除用户 ID=%d, Email=%s, 注册时间=%s',
-                $user->id,
-                $user->email,
-                date('Y-m-d H:i:s', $user->created_at)
-            ));
+                $deleted = DB::table('v2_user')->whereIn('id', $userIds)->delete();
+            }, 3);
 
-            return true;
+            Log::warning('已批量删除用户', [
+                'count' => $deleted,
+                'candidate_count' => $userIds->count(),
+                'first_id' => $userIds->first(),
+                'last_id' => $userIds->last(),
+            ]);
+
+            return $deleted;
         } catch (\Throwable $exception) {
-            DB::rollBack();
-
-            Log::error('删除用户失败', [
-                'user_id' => $user->id,
+            Log::error('批量删除用户失败', [
+                'candidate_count' => $userIds->count(),
+                'first_id' => $userIds->first(),
+                'last_id' => $userIds->last(),
                 'error' => $exception->getMessage(),
             ]);
 
-            return false;
+            return 0;
         }
     }
 }
