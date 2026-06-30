@@ -1,7 +1,7 @@
 {
     "name": "自动删除无效用户",
     "code": "auto_delete_inactive_users",
-    "version": "1.0.8",
+    "version": "1.0.9",
     "description": "定时清理无效用户和过期用户，兼容 expired_at 为 0 或 NULL 的未激活用户，支持试运行模式、游标扫描、批量删除和安全保护。",
     "author": "周宇航",
     "require": {
